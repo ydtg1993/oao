@@ -1,0 +1,310 @@
+package oao
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+// fakeSource 记录收到的 Query，并按预设返回 —— 组件不碰数据层，所以测试也不需要真库。
+type fakeSource struct {
+	gotQuery Query
+	rows     []map[string]any
+	total    int64
+	err      error
+	calls    int
+}
+
+func (f *fakeSource) List(_ context.Context, q Query) ([]map[string]any, int64, error) {
+	f.calls++
+	f.gotQuery = q
+	return f.rows, f.total, f.err
+}
+
+func newTestServer(t *testing.T, tables ...Table) (*httptest.Server, *Oao) {
+	t.Helper()
+	o, err := New(Config{Tables: tables})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	mux := http.NewServeMux()
+	o.Mount(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv, o
+}
+
+func get(t *testing.T, url string) (int, map[string]any) {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatalf("get %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	var body map[string]any
+	if resp.StatusCode == http.StatusOK {
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+	}
+	return resp.StatusCode, body
+}
+
+func TestNewValidatesTable(t *testing.T) {
+	src := &fakeSource{}
+	cases := []struct {
+		name string
+		cfg  Config
+	}{
+		{"没有表", Config{}},
+		{"key 为空", Config{Tables: []Table{{Columns: []Column{{Field: "a"}}, Source: src}}}},
+		{"缺少 Source", Config{Tables: []Table{{Key: "t", Columns: []Column{{Field: "a"}}}}}},
+		{"没有列", Config{Tables: []Table{{Key: "t", Source: src}}}},
+		{"列缺 Field", Config{Tables: []Table{{Key: "t", Source: src, Columns: []Column{{Label: "x"}}}}}},
+		{"列重复", Config{Tables: []Table{{Key: "t", Source: src,
+			Columns: []Column{{Field: "a"}, {Field: "a"}}}}}},
+		{"enum 缺映射", Config{Tables: []Table{{Key: "t", Source: src,
+			Columns: []Column{{Field: "a", Render: RenderEnum}}}}}},
+		{"custom 缺 HTML", Config{Tables: []Table{{Key: "t", Source: src,
+			Columns: []Column{{Field: "a", Render: RenderCustom}}}}}},
+		{"DefaultSort 不是已声明的列", Config{Tables: []Table{{Key: "t", Source: src,
+			Columns: []Column{{Field: "a"}}, DefaultSort: "-b"}}}},
+		{"筛选缺 Field", Config{Tables: []Table{{Key: "t", Source: src,
+			Columns: []Column{{Field: "a"}}, Filters: []Filter{{Label: "x"}}}}}},
+	}
+	for _, c := range cases {
+		if _, err := New(c.cfg); err == nil {
+			t.Fatalf("%s：应当报错", c.name)
+		}
+	}
+}
+
+// 声明的留空项要补成具体值，前端拿到的永远是具体值。
+func TestResolveFillsDefaults(t *testing.T) {
+	src := &fakeSource{}
+	_, o := newTestServer(t, Table{
+		Key: "t", Source: src,
+		Columns: []Column{
+			{Field: "order_no"},                   // 全默认
+			{Field: "created_at", Kind: KindTime}, // 推断成 time 渲染
+			{Field: "amount", Kind: KindNumber, NoSort: true},
+			{Field: "cover", Render: RenderImage}, // size 该补成 64
+		},
+		Filters: []Filter{{Field: "order_no"}}, // 字符串 -> like/input
+	})
+	info, _ := o.Table("t")
+
+	if info.Label != "t" || info.Group != "General" {
+		t.Fatalf("label/group = %q/%q", info.Label, info.Group)
+	}
+	if info.PageSize != 20 || len(info.PageSizes) != 3 {
+		t.Fatalf("分页默认 = %d/%v", info.PageSize, info.PageSizes)
+	}
+
+	c := info.Columns
+	if c[0].Label != "Order No" || c[0].Render != RenderText || c[0].Kind != KindString {
+		t.Fatalf("默认列 = %+v", c[0])
+	}
+	if c[1].Render != RenderTime {
+		t.Fatalf("KindTime 应推断成 time 渲染，得到 %s", c[1].Render)
+	}
+	if c[2].Sortable {
+		t.Fatal("NoSort 的列不应可排序")
+	}
+	if c[3].Size != 64 {
+		t.Fatalf("image 列 size 默认 = %d, want 64", c[3].Size)
+	}
+	if f := info.Filters[0]; f.Op != OpLike || f.Widget != WidgetInput {
+		t.Fatalf("筛选默认 = %s/%s", f.Op, f.Widget)
+	}
+}
+
+func TestListPassesQueryToSource(t *testing.T) {
+	src := &fakeSource{
+		rows:  []map[string]any{{"order_no": "ORD-1"}},
+		total: 42,
+	}
+	srv, _ := newTestServer(t, Table{
+		Key: "order", Source: src, DefaultSort: "-id", PageSize: 20,
+		Columns: []Column{{Field: "id", Kind: KindNumber}, {Field: "order_no"}},
+		Filters: []Filter{{Field: "order_no", Op: OpLike}},
+	})
+
+	code, body := get(t, srv.URL+"/api/oao/order?page=3&size=50&search=abc&sort=-order_no&filter[order_no]=ORD")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+
+	// 组件把 HTTP 参数规范成 Query 交给业务
+	q := src.gotQuery
+	if q.Page != 3 || q.Size != 50 || q.Search != "abc" || q.Sort != "-order_no" {
+		t.Fatalf("query = %+v", q)
+	}
+	if q.Filter["order_no"] != "ORD" {
+		t.Fatalf("filter = %v", q.Filter)
+	}
+
+	// 响应把业务数据 + 列/筛选元数据一起回给前端
+	if body["total"].(float64) != 42 {
+		t.Fatalf("total = %v, want 42", body["total"])
+	}
+	if len(body["columns"].([]any)) != 2 || len(body["filters"].([]any)) != 1 {
+		t.Fatalf("columns/filters 元数据缺失：%v / %v", body["columns"], body["filters"])
+	}
+}
+
+func TestListQueryDefaults(t *testing.T) {
+	src := &fakeSource{}
+	srv, _ := newTestServer(t, Table{
+		Key: "order", Source: src, PageSize: 30,
+		Columns: []Column{{Field: "id"}},
+	})
+
+	// 不传任何参数：page 回退 1，size 回退表的 PageSize
+	if code, _ := get(t, srv.URL+"/api/oao/order"); code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+	if src.gotQuery.Page != 1 || src.gotQuery.Size != 30 {
+		t.Fatalf("默认分页 = %d/%d, want 1/30", src.gotQuery.Page, src.gotQuery.Size)
+	}
+
+	// 非法值与越界值都被纠正
+	get(t, srv.URL+"/api/oao/order?page=0&size=99999")
+	if src.gotQuery.Page != 1 {
+		t.Fatalf("page = %d, want 1", src.gotQuery.Page)
+	}
+	if src.gotQuery.Size != maxPageSize {
+		t.Fatalf("size = %d, want 上限 %d", src.gotQuery.Size, maxPageSize)
+	}
+
+	get(t, srv.URL+"/api/oao/order?page=abc&size=-5")
+	if src.gotQuery.Page != 1 || src.gotQuery.Size != 30 {
+		t.Fatalf("非法参数回退失败 = %+v", src.gotQuery)
+	}
+}
+
+func TestListErrorsAndEdges(t *testing.T) {
+	src := &fakeSource{err: errors.New("boom")}
+	srv, _ := newTestServer(t, Table{Key: "order", Source: src, Columns: []Column{{Field: "id"}}})
+
+	if code, _ := get(t, srv.URL+"/api/oao/nope"); code != http.StatusNotFound {
+		t.Fatalf("未知表 status = %d, want 404", code)
+	}
+	if code, _ := get(t, srv.URL+"/api/oao/order"); code != http.StatusInternalServerError {
+		t.Fatalf("Source 报错 status = %d, want 500", code)
+	}
+
+	// Source 返回 nil 行时要回落成空数组，而不是 JSON null
+	ok := &fakeSource{rows: nil, total: 0}
+	srv2, _ := newTestServer(t, Table{Key: "t", Source: ok, Columns: []Column{{Field: "id"}}})
+	code, body := get(t, srv2.URL+"/api/oao/t")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+	if rows, isArr := body["rows"].([]any); !isArr || len(rows) != 0 {
+		t.Fatalf("rows = %#v, want 空数组", body["rows"])
+	}
+}
+
+func TestTablesEndpoint(t *testing.T) {
+	src := &fakeSource{}
+	srv, _ := newTestServer(t,
+		Table{Key: "zebra", Source: src, Columns: []Column{{Field: "a"}}},
+		Table{Key: "alpha", Source: src, Columns: []Column{{Field: "a"}}},
+	)
+	code, body := get(t, srv.URL+"/api/oao/tables")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+	tables := body["tables"].([]any)
+	if len(tables) != 2 {
+		t.Fatalf("tables = %d, want 2", len(tables))
+	}
+	if tables[0].(map[string]any)["key"] != "alpha" {
+		t.Fatalf("清单应按 key 排序，首项 = %v", tables[0].(map[string]any)["key"])
+	}
+}
+
+func TestMethodNotAllowed(t *testing.T) {
+	src := &fakeSource{}
+	srv, _ := newTestServer(t, Table{Key: "t", Source: src, Columns: []Column{{Field: "id"}}})
+
+	resp, err := http.Post(srv.URL+"/api/oao/t", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", resp.StatusCode)
+	}
+	if src.calls != 0 {
+		t.Fatalf("非法方法不应触达 Source，实际调用了 %d 次", src.calls)
+	}
+}
+
+// 鉴权中间件由宿主注入，组件只负责套上去。
+func TestAuthMiddlewareApplied(t *testing.T) {
+	src := &fakeSource{}
+	o, err := New(Config{
+		Tables: []Table{{Key: "t", Source: src, Columns: []Column{{Field: "id"}}}},
+		Auth: func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("X-Key") != "secret" {
+					http.Error(w, "unauthorized", http.StatusUnauthorized)
+					return
+				}
+				next.ServeHTTP(w, r)
+			})
+		},
+	})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	mux := http.NewServeMux()
+	o.Mount(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	if code, _ := get(t, srv.URL+"/api/oao/t"); code != http.StatusUnauthorized {
+		t.Fatalf("无密钥 status = %d, want 401", code)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/oao/t", nil)
+	req.Header.Set("X-Key", "secret")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("带密钥 status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestParseFilterIgnoresMalformed(t *testing.T) {
+	got := parseFilter(map[string][]string{
+		"filter[order_no]": {"x"},
+		"filter[]":         {"y"},
+		"filter[bad":       {"z"},
+		"other":            {"w"},
+	})
+	if len(got) != 1 || got["order_no"] != "x" {
+		t.Fatalf("parseFilter = %v, want 只留 order_no", got)
+	}
+}
+
+// 没有筛选的表格，filters 要序列化成 []，不能是 null —— 前端就不必判空。
+func TestEmptyFiltersSerializeAsArray(t *testing.T) {
+	_, o := newTestServer(t, Table{Key: "t", Source: &fakeSource{}, Columns: []Column{{Field: "id"}}})
+	b, err := json.Marshal(o.Tables()[0])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(b), `"filters":[]`) {
+		t.Fatalf("序列化结果 = %s, want filters 为空数组", b)
+	}
+}

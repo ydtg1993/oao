@@ -1,0 +1,71 @@
+/* ============================================================
+   Oao — 表格组件样式
+   只消费宿主提供的设计 token，不重复定义：
+     --card --border-color --shadow-color --primary --secondary
+     --secondary-fg --muted-fill --muted-foreground --zebra
+     --font-display --font-body --font-mono
+   独立 demo 下由 demo 自己声明这套 token。
+   ============================================================ */
+
+/* ---- 筛选栏 ---- */
+.oao-filters {
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end;
+    margin-bottom: 14px;
+}
+.oao-filters .f { display: flex; flex-direction: column; gap: 4px; }
+.oao-filters .f > span {
+    font-family: var(--font-display); font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .5px; color: var(--muted-foreground);
+}
+.oao-filters .f input, .oao-filters .f select { padding: 6px 8px; font-size: 12px; }
+.oao-filters .f .range { display: flex; gap: 6px; align-items: center; }
+.oao-filters .f .range input { width: 130px; }
+.oao-filters .f .range i { font-style: normal; opacity: .5; }
+.oao-filters .multi {
+    display: flex; flex-wrap: wrap; gap: 10px; max-width: 420px;
+    border: 2px solid var(--border-color); background: var(--card); padding: 6px 10px;
+}
+.oao-filters .multi label {
+    display: flex; align-items: center; gap: 5px;
+    font-size: 12px; font-weight: 600; cursor: pointer; text-transform: none;
+}
+
+/* ---- 表格单元格 ---- */
+/* 文本列默认单行 + 省略号 + 悬停看全文：
+   不加约束时，一条长文本会竖向换行把行高撑到几百像素，整张表没法看。
+   需要"能一点点看全"的列用 Render: input，它是横向滚动而不是撑高。 */
+.oao-ellipsis {
+    display: inline-block; max-width: 260px; vertical-align: bottom;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.oao-input {
+    font-family: var(--font-mono); font-size: 12px;
+    padding: 4px 6px; border: 2px solid var(--border-color);
+    background: var(--card); color: var(--foreground);
+    box-shadow: 2px 2px 0 0 var(--shadow-color);
+}
+.oao-img {
+    display: block; object-fit: cover;
+    border: 2px solid var(--border-color); box-shadow: 2px 2px 0 0 var(--shadow-color);
+    background: var(--muted-fill);
+}
+.oao-link { font-weight: 700; text-decoration: underline; cursor: pointer; }
+.oao-json {
+    font-family: var(--font-mono); font-size: 11px; color: var(--muted-foreground);
+    display: inline-block; max-width: 260px; vertical-align: bottom;
+}
+.oao-json > summary { cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.oao-json[open] { white-space: normal; word-break: break-all; max-width: 420px; }
+
+/* ---- 分页 ---- */
+.oao-pager { display: flex; gap: 10px; align-items: center; margin-top: 14px; font-size: 13px; flex-wrap: wrap; }
+.oao-pager select { padding: 5px 8px; font-size: 12px; }
+.oao-pager .pg {
+    padding: 7px 14px; border: 2px solid var(--border-color);
+    box-shadow: 3px 3px 0 0 var(--shadow-color); background: var(--primary);
+    cursor: pointer; font-family: var(--font-display); font-weight: 700; color: #111;
+}
+.oao-pager .pg[disabled] { opacity: .4; cursor: default; }
+
+/* ---- 加载 / 空态 ---- */
+.oao-loading { padding: 18px; font-weight: 700; opacity: .6; }

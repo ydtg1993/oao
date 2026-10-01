@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Oao — Demo</title>
+    <link rel="stylesheet" href="/preview.css">
+    <link rel="stylesheet" href="/static/oao/oao.css">
+</head>
+<body>
+<div class="shell">
+    <aside class="sidebar">
+        <div class="brand">OAO</div>
+        <nav>
+            <div class="nav-section">Demo</div>
+            <div id="menu"></div>
+        </nav>
+    </aside>
+    <main class="content">
+        <header class="content-top">
+            <h1 id="title"></h1>
+        </header>
+        <div id="app"></div>
+    </main>
+</div>
+<script src="/static/oao/oao.js"></script>
+<script>
+    async function open(key, label) {
+        document.getElementById('title').textContent = label;
+        document.querySelectorAll('#menu .nav-item').forEach(function (b) {
+            b.classList.toggle('active', b.dataset.key === key);
+        });
+        await Oao.render(document.getElementById('app'), key);
+    }
+    (async function () {
+        Oao.init({ base: '/api/oao' });
+        var tables = await Oao.list();
+        document.getElementById('menu').innerHTML = tables.map(function (t) {
+            return '<button class="nav-item" data-key="' + t.key + '" data-label="' + t.label + '">'
+                + t.label + '</button>';
+        }).join('');
+        document.querySelectorAll('#menu .nav-item').forEach(function (b) {
+            b.onclick = function () { open(b.dataset.key, b.dataset.label); };
+        });
+        if (tables.length) open(tables[0].key, tables[0].label);
+    })();
+</script>
+</body>
+</html>
