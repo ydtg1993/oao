@@ -108,6 +108,10 @@ func validate(t Table) error {
 		if c.Field == "" {
 			return fmt.Errorf("oao: table %q 有列未填 Field", t.Key)
 		}
+		if !validKey(c.Field) {
+			// Field 会进 data-field / data-sort，也会被业务当 SQL 列名用
+			return fmt.Errorf("oao: table %q 列 %q 只能用字母、数字、下划线、连字符", t.Key, c.Field)
+		}
 		if seen[c.Field] {
 			return fmt.Errorf("oao: table %q 列 %q 重复", t.Key, c.Field)
 		}
@@ -122,6 +126,9 @@ func validate(t Table) error {
 	for _, f := range t.Filters {
 		if f.Field == "" {
 			return fmt.Errorf("oao: table %q 有筛选项未填 Field", t.Key)
+		}
+		if !validKey(f.Field) {
+			return fmt.Errorf("oao: table %q 筛选字段 %q 只能用字母、数字、下划线、连字符", t.Key, f.Field)
 		}
 	}
 	if t.DefaultSort != "" {
@@ -140,13 +147,23 @@ func validate(t Table) error {
 	return nil
 }
 
-// Tables 返回全部表格元数据，供宿主渲染侧边栏菜单。
-func (o *Oao) Tables() []*TableInfo { return o.tables }
+// Tables 返回全部表格元数据的**副本**，供宿主渲染侧边栏菜单。
+// 返回副本是为了让调用方改不到内部状态（那些字段同时在服务端读取）。
+func (o *Oao) Tables() []*TableInfo {
+	out := make([]*TableInfo, 0, len(o.tables))
+	for _, t := range o.tables {
+		out = append(out, t.clone())
+	}
+	return out
+}
 
-// Table 按 key 取表格元数据。
+// Table 按 key 取表格元数据的副本。
 func (o *Oao) Table(key string) (*TableInfo, bool) {
 	t, ok := o.byKey[key]
-	return t, ok
+	if !ok {
+		return nil, false
+	}
+	return t.clone(), true
 }
 
 // Prefix 返回 API 前缀。

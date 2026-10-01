@@ -339,3 +339,112 @@ func TestNewValidatesKeysAndPrefix(t *testing.T) {
 		t.Fatalf("合法的 key 不该被拒：%v", err)
 	}
 }
+
+// 排序白名单必须在注册时建好。
+// 之前 markSortable 定义了却没被调用，导致 SortFields() 恒为空 ——
+// 排序静默失效（表头箭头照显示、请求照带 sort，服务端全丢），且分页会重复/漏行。
+// 这个用例特意走 New() 而不是手搓 Query，就是为了盯住它。
+func TestSortableSetBuiltFromDeclaration(t *testing.T) {
+	o, err := New(Config{Tables: []Table{{
+		Key: "order", Source: &fakeSource{},
+		Columns: []Column{
+			{Field: "id", Kind: KindNumber},
+			{Field: "amount", Kind: KindNumber},
+			{Field: "note", NoSort: true},
+		},
+	}}})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	info, _ := o.Table("order")
+
+	// 声明的可排序列要能通过
+	for _, name := range []string{"id", "amount", "-amount", "-id"} {
+		if q := (Query{Sort: name, sortable: info.sortableSet}); len(q.SortFields()) != 1 {
+			t.Fatalf("Sort=%q 应被接受，SortFields()=%v", name, q.SortFields())
+		}
+	}
+	// NoSort 的列与未声明的列要被挡掉
+	for _, name := range []string{"note", "nope"} {
+		if q := (Query{Sort: name, sortable: info.sortableSet}); len(q.SortFields()) != 0 {
+			t.Fatalf("Sort=%q 不该被接受", name)
+		}
+	}
+}
+
+// 多字段排序在真实注册流程下也要通。
+func TestSortFieldsThroughNew(t *testing.T) {
+	o, _ := New(Config{Tables: []Table{{
+		Key: "t", Source: &fakeSource{},
+		Columns:     []Column{{Field: "status", Kind: KindNumber}, {Field: "id", Kind: KindNumber}},
+		DefaultSort: "-status,id",
+	}}})
+	info, _ := o.Table("t")
+	q := Query{Sort: info.DefaultSort, sortable: info.sortableSet}
+	got := q.SortFields()
+	if len(got) != 2 || got[0].Field != "status" || !got[0].Desc || got[1].Field != "id" {
+		t.Fatalf("SortFields = %+v, want [-status, id]", got)
+	}
+}
+
+// bool 列默认渲染成"是/否"的标签，而不是裸 true/false。
+func TestBoolColumnDefaultEnum(t *testing.T) {
+	o, err := New(Config{Tables: []Table{{
+		Key: "t", Source: &fakeSource{},
+		Columns: []Column{{Field: "downloaded", Kind: KindBool}, {Field: "shown", Kind: KindBool, Enum: map[string]string{"true": "已展示"}}},
+	}}})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	info, _ := o.Table("t")
+	if got := info.Columns[0].Enum["true"]; got != "是" {
+		t.Fatalf("bool 列应有默认映射，得到 %q", got)
+	}
+	// 显式给的不该被覆盖
+	if got := info.Columns[1].Enum["true"]; got != "已展示" {
+		t.Fatalf("显式 Enum 被覆盖了：%q", got)
+	}
+}
+
+// 会进路由 / data-field / SQL 列名的标识符都要限制字符集。
+func TestNameValidation(t *testing.T) {
+	bad := []struct {
+		name string
+		page Table
+	}{
+		{"列 Field 带引号", Table{Key: "t", Source: &fakeSource{}, Columns: []Column{{Field: `a"b`}}}},
+		{"列 Field 带空格", Table{Key: "t", Source: &fakeSource{}, Columns: []Column{{Field: "a b"}}}},
+		{"筛选 Field 带斜杠", Table{Key: "t", Source: &fakeSource{},
+			Columns: []Column{{Field: "a"}}, Filters: []Filter{{Field: "a/b"}}}},
+		{"动作 Key 带斜杠", Table{Key: "t", Source: &fakeSource{},
+			Columns: []Column{{Field: "a"}},
+			Actions: []Action{{Key: "a/b", Handler: func(context.Context, ActionRequest) error { return nil }}}}},
+		{"表单项 Name 带引号", Table{Key: "t", Source: &fakeSource{},
+			Columns: []Column{{Field: "a"}},
+			Actions: []Action{{Key: "ok", Handler: func(context.Context, ActionRequest) error { return nil },
+				Form: []Field{{Name: `x"y`}}}}}},
+	}
+	for _, c := range bad {
+		if _, err := New(Config{Tables: []Table{c.page}}); err == nil {
+			t.Fatalf("%s：应当报错", c.name)
+		}
+	}
+}
+
+// Tables()/Table() 返回副本：调用方改了不影响内部状态（那些字段服务端也在读）。
+func TestTablesReturnsCopy(t *testing.T) {
+	o, _ := New(Config{Tables: []Table{{
+		Key: "t", Source: &fakeSource{}, Columns: []Column{{Field: "a", Label: "原始"}},
+	}}})
+	got := o.Tables()
+	got[0].Columns[0].Label = "被改了"
+	got[0].Filters = append(got[0].Filters, FilterInfo{Name: "x"})
+
+	fresh, _ := o.Table("t")
+	if fresh.Columns[0].Label != "原始" {
+		t.Fatalf("内部元数据被外部改动了：%q", fresh.Columns[0].Label)
+	}
+	if len(fresh.Filters) != 0 {
+		t.Fatalf("内部 Filters 被外部改动了：%v", fresh.Filters)
+	}
+}

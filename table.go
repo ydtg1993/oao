@@ -119,8 +119,17 @@ func (t Table) resolve() (*TableInfo, error) {
 	if info.PageSize <= 0 {
 		info.PageSize = 20
 	}
+	if info.PageSize > maxPageSize {
+		return nil, fmt.Errorf("oao: table %q 的 PageSize %d 超过上限 %d，会被服务端截断导致分页器对不上",
+			t.Key, info.PageSize, maxPageSize)
+	}
 	if len(info.PageSizes) == 0 {
 		info.PageSizes = []int{20, 50, 100}
+	}
+	for _, s := range info.PageSizes {
+		if s <= 0 || s > maxPageSize {
+			return nil, fmt.Errorf("oao: table %q 的 PageSizes 含非法值 %d（需在 1..%d 之间）", t.Key, s, maxPageSize)
+		}
 	}
 
 	for _, c := range t.Columns {
@@ -137,10 +146,21 @@ func (t Table) resolve() (*TableInfo, error) {
 		if ci.Render == RenderAuto {
 			ci.Render = defaultRender(ci.Kind)
 		}
+		// bool 列会被推断成 enum，不给映射就会退化成裸 true/false 文本 —— 补一份默认文案。
+		// （显式 Render: RenderEnum 却没给 Enum 的，validate 已经拦了）
+		if ci.Render == RenderEnum && ci.Kind == KindBool && len(ci.Enum) == 0 {
+			ci.Enum = map[string]string{"true": "是", "false": "否"}
+			ci.Tone = map[string]string{"true": "ok", "false": ""}
+		}
 		if ci.Render == RenderImage && ci.Size <= 0 {
 			ci.Size = 64
 		}
 		info.Columns = append(info.Columns, ci)
+		if ci.Sortable {
+			// 必须在这里登记：Query.SortFields() 靠它校验排序参数，
+			// 漏了会让所有排序静默失效（不报错、只是没有 ORDER BY）
+			info.markSortable(ci.Name)
+		}
 	}
 
 	filterSeen := make(map[string]bool, len(t.Filters))
@@ -191,14 +211,24 @@ func (t Table) resolve() (*TableInfo, error) {
 	return info, nil
 }
 
-// column 按字段名找已声明的列。
-func (t *TableInfo) column(name string) (ColumnInfo, bool) {
-	for _, c := range t.Columns {
-		if c.Name == name {
-			return c, true
-		}
+// clone 浅拷贝一份元数据（切片也复制），让外部拿不到内部可变状态。
+// 未导出的那几个字段是只读引用，拷过去无妨。
+func (t *TableInfo) clone() *TableInfo {
+	c := *t
+	c.Columns = cloneSlice(t.Columns)
+	c.Filters = cloneSlice(t.Filters)
+	c.Actions = cloneSlice(t.Actions)
+	c.PageSizes = cloneSlice(t.PageSizes)
+	return &c
+}
+
+// cloneSlice 复制切片并**保留"非 nil 空切片"语义** ——
+// 直接用 append([]T(nil), in...) 会把空切片变成 nil，序列化就从 [] 变成 null。
+func cloneSlice[T any](in []T) []T {
+	if in == nil {
+		return nil
 	}
-	return ColumnInfo{}, false
+	return append(make([]T, 0, len(in)), in...)
 }
 
 // markSortable 记下一个可排序列。

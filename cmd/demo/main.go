@@ -87,13 +87,12 @@ func main() {
 						Key: "approve", Label: "审核通过", Tone: oao.ToneOK,
 						Confirm: "确认通过该订单？",
 						Handler: func(ctx context.Context, req oao.ActionRequest) error {
-							// 乐观锁：updated_at 是隐藏列（不显示但会下发到前端，操作时原样带回）
-							if was := req.RowString("updated_at"); was != "" {
-								if cur, ok := src.updatedAtOf(req.ID); ok && cur != was {
-									return oao.Fail(http.StatusConflict, "该行已被他人修改，请刷新后重试")
-								}
-							}
-							return src.update(req.ID, map[string]any{"status": 2})
+							// 乐观锁：updated_at 是隐藏列（不显示但会下发，操作时原样带回）。
+							// 注意 Row 是**客户端回传**的，不能拿它当真相 —— 必须把版本条件
+							// 写进更新语句本身。SQL 里就是：
+							//   UPDATE orders SET status=2, updated_at=NOW()
+							//   WHERE id=? AND updated_at=?  并检查 RowsAffected==1
+							return src.approveIfUnchanged(req.ID, req.RowString("updated_at"))
 						},
 					},
 					// 演示业务校验失败：金额为负时用 oao.Fail 指定状态码
@@ -334,6 +333,30 @@ func (s *orderSource) update(id string, values map[string]any) error {
 				}
 			}
 		}
+		s.rows[i].UpdatedAt = time.Now()
+		return nil
+	}
+	return oao.Fail(http.StatusNotFound, "订单 %s 不存在", id)
+}
+
+// approveIfUnchanged 带版本条件地通过订单：比对与写入在同一步完成，
+// 避免"先查再写"之间的窗口（真项目里就是 UPDATE ... WHERE updated_at=? + RowsAffected）。
+func (s *orderSource) approveIfUnchanged(id, was string) error {
+	if was == "" {
+		return oao.Fail(http.StatusBadRequest, "缺少 updated_at，无法做乐观锁")
+	}
+	n, err := strconv.Atoi(id)
+	if err != nil {
+		return oao.Fail(http.StatusBadRequest, "非法的主键：%s", id)
+	}
+	for i := range s.rows {
+		if s.rows[i].ID != n {
+			continue
+		}
+		if s.rows[i].UpdatedAt.Format(time.RFC3339Nano) != was {
+			return oao.Fail(http.StatusConflict, "该行已被他人修改，请刷新后重试")
+		}
+		s.rows[i].Status = 2
 		s.rows[i].UpdatedAt = time.Now()
 		return nil
 	}

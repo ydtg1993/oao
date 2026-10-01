@@ -14,6 +14,9 @@ import (
 // maxPageSize 单页最大条数，防止前端传个巨大 size 让业务 Source 一次捞全表。
 const maxPageSize = 200
 
+// maxActionBody 操作请求体上限（Row 会带上整行，给宽一点但要有边界）。
+const maxActionBody = 1 << 20 // 1 MiB
+
 // Mount 把组件的 API 挂到宿主的 mux 上，并套上宿主注入的鉴权中间件。
 // 静态资源不在这里挂 —— 宿主自己把 StaticFS 挂到想要的路径。
 func (o *Oao) Mount(mux *http.ServeMux) {
@@ -70,7 +73,9 @@ func (o *Oao) handleAction(w http.ResponseWriter, r *http.Request) {
 		Row    map[string]any `json:"row"`
 	}
 	if r.Body != nil {
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		// 限制请求体：Row 是整行回传，没有上限的话一个畸形请求就能吃光内存
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxActionBody))
+		if err := dec.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
 			http.Error(w, "invalid body", http.StatusBadRequest)
 			return
 		}

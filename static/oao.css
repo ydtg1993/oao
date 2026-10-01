@@ -53,7 +53,7 @@ textarea.oao-input { height: auto; padding: 8px 10px; resize: vertical; line-hei
 .oao-select-item {
     display: flex; align-items: center; gap: 8px;
     padding: 6px 8px; cursor: pointer; font-size: 13px; font-weight: 600;
-    border-radius: calc(var(--oao-radius, 0px) / 2);
+    border-radius: calc(var(--oao-radius, 0) / 2);
 }
 .oao-select-item:hover, .oao-select-item.hl { background: var(--blue); }
 .oao-select-item.on { background: var(--primary); color: #111; }
@@ -204,7 +204,8 @@ textarea.oao-input { height: auto; padding: 8px 10px; resize: vertical; line-hei
    自己已有页面框架的宿主不会用到这一段。
    ============================================================ */
 /* 外壳按视口高度撑满，整页不滚动 —— 超高/超宽都在内部滚 */
-.oao-shell { display: flex; height: 100dvh; min-width: 0; overflow: hidden; }
+/* 外壳高度：默认占满视口。嵌进已有页面的子区域时，宿主用 --oao-shell-height 改掉 */
+.oao-shell { display: flex; height: var(--oao-shell-height, 100dvh); min-width: 0; overflow: hidden; }
 .oao-side {
     width: 210px; flex-shrink: 0; background: var(--background);
     border-right: 2px solid var(--border-color);
@@ -350,3 +351,6 @@ textarea.oao-input { height: auto; padding: 8px 10px; resize: vertical; line-hei
 .oao-switch input:checked + .oao-switch-track { background: var(--primary); }
 .oao-switch input:checked + .oao-switch-track > i { transform: translateX(20px); background: #111; }
 .oao-switch input:focus-visible + .oao-switch-track { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+/* 每页条数：跟筛选栏的下拉同宽同高 */
+.oao-pager .oao-pagesize { height: 28px; padding: 0 8px; font-size: 12px; box-shadow: 2px 2px 0 0 var(--shadow-color); }

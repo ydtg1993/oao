@@ -233,11 +233,22 @@ window.Oao = (function () {
         });
     }
 
+    /**
+     * formControl 取字段的「值载体」。
+     * 下拉的触发器是个 <button data-field=...>，它 value 恒为空 —— 真正的值在同名隐藏 input 里。
+     * 直接 querySelector('[data-field=x]') 会先命中按钮，把值读成空，所以统一走这里。
+     */
+    function formControl(root, name) {
+        return root.querySelector('input[data-field="' + name + '"],'
+            + 'textarea[data-field="' + name + '"],'
+            + 'select[data-field="' + name + '"]');
+    }
+
     /** 从表单 DOM 读回值（按 kind 转换类型；开关没勾也要提交 false） */
     function readForm(root, fields) {
         var values = {};
         fields.forEach(function (f) {
-            var el = root.querySelector('[data-field="' + f.name + '"]');
+            var el = formControl(root, f.name);
             if (!el) return;
             if (f.widget === 'switch') { values[f.name] = el.checked; return; }
             var v = el.value;
@@ -251,7 +262,7 @@ window.Oao = (function () {
         for (var i = 0; i < fields.length; i++) {
             var f = fields[i];
             if (!f.required) continue;
-            var el = root.querySelector('[data-field="' + f.name + '"]');
+            var el = formControl(root, f.name);
             if (!el) continue;
             var empty = f.widget === 'switch' ? false : String(el.value).trim() === '';
             if (empty) return f.label + '不能为空';
@@ -332,8 +343,12 @@ window.Oao = (function () {
         var v = row[col.name];
         if (col.render === 'enum') {
             if (v === null || v === undefined || v === '') return '<span class="muted">-</span>';
-            var text = (col.enum && col.enum[String(v)]) || String(v);
-            var tone = (col.tone && col.tone[String(v)]) || '';
+            // bool 列先归一：MySQL 扫 tinyint 出来是 1/0，而 Enum 一般按 "true"/"false" 声明
+            var key = col.kind === 'bool'
+                ? ((v === true || v === 1 || v === '1' || v === 'true') ? 'true' : 'false')
+                : String(v);
+            var text = (col.enum && col.enum[key]) || String(v);
+            var tone = (col.tone && col.tone[key]) || '';
             return '<span class="badge ' + esc(tone) + '">' + esc(text) + '</span>';
         }
         if (v === null || v === undefined || v === '') return '<span class="muted">-</span>';
@@ -396,6 +411,7 @@ window.Oao = (function () {
 
         /** place 贴在触发器下方；下面放不下就往上翻 */
         function place() {
+            if (!cur.trigger.isConnected) return; // 触发器已被重绘换掉，别再摆
             var r = cur.trigger.getBoundingClientRect();
             panel.style.minWidth = r.width + 'px';
             panel.style.left = Math.round(r.left) + 'px';
@@ -419,6 +435,7 @@ window.Oao = (function () {
 
         function renderTrigger(state) {
             var v = state.trigger.querySelector('.v');
+            state.trigger.setAttribute('aria-expanded', String(cur === state));
             if (!v) return;
             var text = labelOf(state);
             v.textContent = text || state.placeholder || '全部';
@@ -504,7 +521,10 @@ window.Oao = (function () {
             var trigger = cur.trigger;
             panel.hidden = true;
             cur = null;
-            if (refocus && trigger) trigger.focus();
+            if (trigger) {
+                trigger.setAttribute('aria-expanded', 'false');
+                if (refocus) trigger.focus();
+            }
         }
 
         return {
@@ -522,6 +542,8 @@ window.Oao = (function () {
                 trigger.__oaoSelect = state; // 重绘后重新 attach 时复用它
                 if (!trigger.__oaoBound) {
                     trigger.__oaoBound = true;
+                trigger.setAttribute('aria-haspopup', 'listbox');
+                trigger.setAttribute('aria-expanded', 'false');
                     trigger.addEventListener('click', function (e) {
                         e.preventDefault();
                         e.stopPropagation();
@@ -531,6 +553,7 @@ window.Oao = (function () {
                     trigger.addEventListener('keydown', function (e) {
                         if (e.key === 'Enter' || e.key === ' ') {
                             e.preventDefault();
+                            e.stopPropagation(); // 否则 document 上的 Enter 分支会再选一次（此时 hl 还是 -1）
                             open(trigger.__oaoSelect);
                         }
                     });
@@ -637,21 +660,29 @@ window.Oao = (function () {
         var cols = meta.columns.filter(function (c) { return !c.hidden; });
         var hasActions = meta.actions && meta.actions.length > 0;
         var head = cols.map(function (c) {
-            if (!c.sortable) return '<th>' + esc(c.label) + '</th>';
+            var width = c.width ? ' style="width:' + esc(c.width) + '"' : '';
+            if (!c.sortable) {
+                return '<th' + width + ' scope="col">' + esc(c.label) + '</th>';
+            }
             var s = sortIndexOf(sort, c.name);
             var arrow = '';
+            var aria = 'none';
             if (s.index >= 0) {
                 // 多字段排序时标上优先级序号
                 arrow = (s.desc ? ' ▼' : ' ▲') + (s.total > 1 ? String(s.index + 1) : '');
+                aria = s.desc ? 'descending' : 'ascending';
             }
-            return '<th class="sortable" data-sort="' + esc(c.name) + '" title="点击排序，Shift+点击多字段排序">'
+            return '<th class="sortable" scope="col" aria-sort="' + aria + '"' + width
+                + ' data-sort="' + esc(c.name) + '" title="点击排序，Shift+点击多字段排序">'
                 + esc(c.label) + arrow + '</th>';
-        }).join('') + (hasActions ? '<th>操作</th>' : '');
+        }).join('') + (hasActions ? '<th scope="col">操作</th>' : '');
         var body = rows.map(function (r, i) {
             return '<tr>' + cols.map(function (c) { return '<td>' + cell(c, r) + '</td>'; }).join('')
                 + (hasActions ? '<td>' + actionColumn(meta, i) + '</td>' : '') + '</tr>';
         }).join('');
-        return '<div class="table-wrap"><table><thead><tr>' + head + '</tr></thead>'
+        // tabindex/role/aria-label：溢出时键盘也能滚到内容（组件库 Table 规格的建议）
+        return '<div class="table-wrap" tabindex="0" role="region" aria-label="'
+            + esc(meta.label || meta.key) + ' 数据表"><table><thead><tr>' + head + '</tr></thead>'
             + '<tbody>' + body + '</tbody></table></div>';
     }
 
@@ -659,9 +690,7 @@ window.Oao = (function () {
         var last = Math.max(1, Math.ceil(data.total / data.size));
         return '<div class="oao-pager">'
             + '<span>共 ' + data.total + ' 条</span>'
-            + '<select data-pagesize>' + (meta.page_sizes || [20, 50, 100]).map(function (s) {
-                return '<option value="' + s + '"' + (s === data.size ? ' selected' : '') + '>' + s + ' 条/页</option>';
-            }).join('') + '</select>'
+            + '<button type="button" class="oao-select-trigger oao-pagesize" data-pagesize><span class="v"></span>' + CARET + '</button>'
             + '<button class="pg" data-go="' + (data.page - 1) + '"' + (data.page <= 1 ? ' disabled' : '') + '>上一页</button>'
             + '<span>第 ' + data.page + ' / ' + last + ' 页</span>'
             + '<button class="pg" data-go="' + (data.page + 1) + '"' + (data.page >= last ? ' disabled' : '') + '>下一页</button>'
@@ -697,14 +726,11 @@ window.Oao = (function () {
 
     /** 从 DOM 读回筛选值（多选拼逗号串，区间拼 a..b） */
     function readFilter(st, root) {
-        var filter = {};
+        // 以现有条件为基底：Select 的值只存在 st.query.filter 里、DOM 中没有对应控件，
+        // 从空对象重建会把下拉选择静默抹掉
+        var filter = Object.assign({}, st.query.filter);
         root.querySelectorAll('[data-filter]:not(.oao-select-trigger)').forEach(function (el) {
             var name = el.getAttribute('data-filter');
-            if (el.type === 'checkbox') {
-                if (el.checked) filter[name] = filter[name] ? filter[name] + ',' + el.value : el.value;
-                else if (!(name in filter)) filter[name] = '';
-                return;
-            }
             if (el.getAttribute('data-part')) {
                 // 区间两半都塞进同一个值；只填一半也先留着，
                 // 否则重绘会把用户刚选的日期抹掉
@@ -745,6 +771,7 @@ window.Oao = (function () {
             }
             if (!st.meta) throw new Error('未知表格：' + key);
 
+            Select.close(); // 面板挂在 body 上，重绘清不掉它
             st.el.innerHTML = '<div class="oao-loading">加载中...</div>';
             var data = await api('/' + encodeURIComponent(key) + '?' + queryString(st.query));
             if (stale()) return;
@@ -753,6 +780,7 @@ window.Oao = (function () {
             st.meta.filters = data.filters;
             if (data.actions) st.meta.actions = data.actions;
             st.rows = data.rows || [];
+            st.lastSize = data.size;
 
             st.el.innerHTML = '<div class="oao-view">'
                 + filterBar(st.meta) + table(st.meta, st.rows, st.query.sort) + pager(st.meta, data)
@@ -796,12 +824,19 @@ window.Oao = (function () {
         root.querySelectorAll('[data-go]').forEach(function (b) {
             b.onclick = function () { st.query.page = parseInt(b.getAttribute('data-go'), 10); load(key); };
         });
-        root.querySelectorAll('[data-pagesize]').forEach(function (s) {
-            s.onchange = function () { st.query.size = parseInt(s.value, 10); st.query.page = 1; load(key); };
-        });
+        var ps = root.querySelector('[data-pagesize]');
+        if (ps) {
+            Select.attach(ps, {
+                options: (st.meta.page_sizes || [20, 50, 100]).map(function (n) {
+                    return { value: String(n), label: n + ' 条/页' };
+                }),
+                value: String(st.lastSize || st.meta.page_size),
+                onChange: function (v) { st.query.size = parseInt(v, 10); st.query.page = 1; load(key); },
+            });
+        }
         bindSelects(st, root, key);
         root.querySelectorAll('[data-filter]:not(.oao-select-trigger)').forEach(function (el) {
-            var ev = (el.tagName === 'SELECT' || el.type === 'checkbox' || el.type === 'date') ? 'change' : 'keydown';
+            var ev = el.type === 'date' ? 'change' : 'keydown';
             el.addEventListener(ev, function (e) {
                 if (ev === 'keydown' && e.key !== 'Enter') return;
                 readFilter(st, root);
@@ -879,23 +914,23 @@ window.Oao = (function () {
         var titleEl = el.querySelector('.oao-top h1');
         var content = el.querySelector('.oao-content');
 
-        if (opts.sidebarFooter) fillSlot(sideFoot, opts.sidebarFooter);
-        if (opts.headerRight) fillSlot(topRight, opts.headerRight);
-
         var current = null;
+        // api 给本实例用：每个 mount 各有一份，多实例不会串
         var apiObj = {
             /** 重新加载当前页 */
             reload: function () { if (current) select(current); },
-            /** 切到某个页面或表格 */
-            open: function (key) { var b = el.querySelector('[data-oao-key="' + key + '"]'); if (b) b.click(); },
+            /** 切到某个页面或表格（按 key） */
+            select: function (key) { select(key); },
             /** 改标题（页面渲染里调） */
             setTitle: function (t) { titleEl.textContent = t; },
             /** 当前页面 key */
             current: function () { return current; },
             /** 页面容器，宿主页面想自己往里面塞东西时用 */
-            content: function () { return content; }
+            content: function () { return content; },
         };
 
+        if (opts.sidebarFooter) fillSlot(sideFoot, opts.sidebarFooter, apiObj);
+        if (opts.headerRight) fillSlot(topRight, opts.headerRight, apiObj);
         async function select(key) {
             var item = menu.byKey[key];
             if (!item) return;
@@ -908,6 +943,7 @@ window.Oao = (function () {
                 b.classList.toggle('active', b.getAttribute('data-oao-key') === key);
             });
             titleEl.textContent = item.label;
+            Select.close(); // 切页时把浮在外面的下拉面板收掉
             content.innerHTML = '';
             if (item.table) {
                 var st = stateOf(item.table);
@@ -922,7 +958,7 @@ window.Oao = (function () {
                 }
             }
         }
-        mountApi.select = select;
+        apiObj.open = function (key) { select(key); };
 
         el.querySelectorAll('.oao-nav-item').forEach(function (b) {
             b.onclick = function () { select(b.getAttribute('data-oao-key')); };
@@ -932,8 +968,6 @@ window.Oao = (function () {
         if (opts.onReady) opts.onReady(apiObj);
         return apiObj;
     }
-
-    var mountApi = {};
 
     /** buildMenu 把宿主页面与 oao 表格按 group 合成菜单，group 顺序取首次出现的顺序 */
     function buildMenu(hostPages, tables) {
@@ -963,9 +997,9 @@ window.Oao = (function () {
         return { html: html, byKey: byKey, order: order };
     }
 
-    /** fillSlot 插槽内容：字符串直接当 HTML，函数则以元素为参数回调 */
-    function fillSlot(el, slot) {
-        if (typeof slot === 'function') slot(el, mountApi);
+    /** fillSlot 插槽内容：字符串直接当 HTML，函数则以 (元素, api) 为参数回调 */
+    function fillSlot(el, slot, api) {
+        if (typeof slot === 'function') slot(el, api);
         else el.innerHTML = slot;
     }
 

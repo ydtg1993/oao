@@ -278,6 +278,22 @@ Actions: []oao.Action{
 
 **表不声明 `Actions` 就是只读的**——不注册任何写路由，未声明的动作一律 404。
 
+`oao.Field` 的字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `Name` | 字段名，也是 `Values` 里的 key（限字母数字下划线连字符） |
+| `Label` | 展示名，留空按 `Name` 生成 |
+| `Kind` | `string` / `number` / `bool` / `time` / `json`，决定默认控件 |
+| `Widget` | `input` / `number` / `textarea` / `select` / `switch` / `date`，留空按 `Kind` 推 |
+| `Options` | 下拉的选项：值 → 文案 |
+| `Required` | 必填，空值会被前端拦下、弹窗不关 |
+| `Help` | 字段下方的说明 |
+| `Rows` | 多行文本框行数，默认 3 |
+| `Placeholder` | 下拉未选择时触发器上的提示，默认「请选择」 |
+
+> 提交上来的 `Values` **只包含这里声明过的字段**（无论客户端多塞了什么）。
+
 ### 在 Handler 里取值
 
 前端提交的是 JSON，**数字一律是 `float64`**，用助手取更省事：
@@ -297,12 +313,23 @@ func approve(ctx context.Context, req oao.ActionRequest) error {
 }
 ```
 
+> **`Row` 是客户端回传的，不能当真相。** 它只是"用户看到的那一行的快照"，
+> 客户端可以伪造，中间也隔着一段网络时间。真要防并发覆盖，必须把版本条件写进**更新语句本身**
+> 并检查影响行数：
+>
+> ```sql
+> UPDATE orders SET status=2, updated_at=NOW()
+>  WHERE id=? AND updated_at=?     -- 影响行数为 0 就是别人改过了
+> ```
+>
+> 只做"先查再写"（TOCTOU）等于没有锁。参考实现见 `cmd/demo` 的 `approveIfUnchanged`。
+
 | `ActionRequest` 字段 | 说明 |
 | --- | --- |
 | `Table` / `Action` | 表 key / 动作 key |
 | `ID` | 目标行主键（字符串；组件不知道你的主键叫什么） |
 | `Values` | 表单提交的字段值 |
-| `Row` | 客户端展示时那一行的原始数据（**乐观锁比对用**） |
+| `Row` | 客户端展示时那一行的原始数据（**乐观锁比对用，见下**） |
 | `Req` | 逃生舱：要读请求头/鉴权信息时用 |
 
 助手：`String(name)` / `Int(name) (int,bool)` / `Float(name) (float64,bool)` / `Bool(name)` / `RowString(name)`。
@@ -364,7 +391,7 @@ Oao.mount(document.getElementById('app'), {
 
 **菜单怎么来**：`pages[].group` 与表格的 `Table.Group` 合并，按**首次出现的顺序**分组。
 
-**布局**：外壳按视口高度撑满（`100dvh`），**整页不滚动** —— 内容超高、超宽都在内容区内部滚，
+**布局**：外壳按视口高度撑满（`var(--oao-shell-height, 100dvh)`），**整页不滚动** —— 内容超高、超宽都在内容区内部滚，
 侧边栏菜单长了也自己滚。滚动条默认透明，鼠标移到容器上才显形（能拖，但不占视觉）。
 
 **插槽**：`headerRight` / `sidebarFooter` 收 HTML 字符串或 `(el, api) => void`。
@@ -484,12 +511,18 @@ Oao.init({
   宿主可以覆盖 `.oao-view` 下的任何规则来贴合自己的视觉；不想覆盖就自己声明这套 token
   （最小示例见 `cmd/demo/web/preview.css`）。
   另外组件会用 `data-tip` 属性做"悬停看全文"，样式由宿主提供 —— 忘了补也不影响功能。
+- **嵌入已有页面**：`mount` 默认占满视口。要嵌进页面的某个子区域，用 `--oao-shell-height`
+  覆盖高度（比如 `--oao-shell-height: 600px` 或 `100%`），并保证该容器自己有确定高度。
 - **圆角**：默认 0（直角）。想跟 neobrutalism 组件库一样带轻微圆角，声明 `--oao-radius: 4px` 即可。
 - **表单控件**：输入框 / 下拉都按组件库的 `Field` 规格（label 在上、控件在下），
   下拉是自带的下拉面板（不是原生 `<select>`）：单选点一下就选、**多选带 checkbox 且面板不关**，
   支持键盘上下移动、Enter 选中、Esc 关闭、点外部关闭。
 - **依赖**：`go.mod` 无外部依赖。
 - **安全**：列名、筛选字段、排序字段全部走声明白名单，HTTP 参数无法注入；未声明的动作返回 404。
+  表 key / 列 Field / 筛选 Field / 动作 key / 表单项 Name 都限制为字母数字下划线连字符 ——
+  它们会进 URL 路由和 `data-*` 属性。操作请求体上限 1 MiB。
+- **无障碍**：表头带 `aria-sort`，横向滚动容器带 `role="region"` / `tabindex="0"` / `aria-label`
+  （溢出时键盘也能滚），下拉触发器带 `aria-haspopup="listbox"` 与 `aria-expanded`。
   另外三处**字段级白名单**也由组件把住，业务不用自己防：
   1. **列表下发**：`rows` 只保留列声明过的字段。Source 里的 `SELECT *` 不会把未声明的列（密码哈希、
      大 JSON）带到浏览器。想下发但不显示，声明成 `Hidden`。

@@ -117,6 +117,9 @@ type Field struct {
 	Required bool
 	Help     string // 字段下方的说明
 	Rows     int    // 多行文本框的行数，默认 3
+
+	// Placeholder 下拉未选择时触发器上的提示，默认"请选择"
+	Placeholder string
 }
 
 // ActionInfo 操作/表单字段的渲染元数据 —— 注册时把留空项补齐。
@@ -130,14 +133,15 @@ type ActionInfo struct {
 
 // FieldInfo 表单字段的渲染元数据。
 type FieldInfo struct {
-	Name     string            `json:"name"`
-	Label    string            `json:"label"`
-	Kind     Kind              `json:"kind"`
-	Widget   Widget            `json:"widget"`
-	Options  map[string]string `json:"options,omitempty"`
-	Required bool              `json:"required,omitempty"`
-	Help     string            `json:"help,omitempty"`
-	Rows     int               `json:"rows,omitempty"`
+	Name        string            `json:"name"`
+	Label       string            `json:"label"`
+	Kind        Kind              `json:"kind"`
+	Widget      Widget            `json:"widget"`
+	Options     map[string]string `json:"options,omitempty"`
+	Required    bool              `json:"required,omitempty"`
+	Help        string            `json:"help,omitempty"`
+	Rows        int               `json:"rows,omitempty"`
+	Placeholder string            `json:"placeholder,omitempty"`
 }
 
 // ActionEvent 一次操作转发的结局，供宿主记审计（成功与失败都会回调）。
@@ -191,6 +195,10 @@ func resolveActions(tableKey string, actions []Action, columns []ColumnInfo) ([]
 		if a.Key == "" {
 			return nil, nil, fmt.Errorf("oao: table %q 有操作未填 Key", tableKey)
 		}
+		if !validKey(a.Key) {
+			// Key 会进路由 {prefix}/{table}/action/{key}
+			return nil, nil, fmt.Errorf("oao: table %q 操作 key %q 只能用字母、数字、下划线、连字符", tableKey, a.Key)
+		}
 		if seen[a.Key] {
 			return nil, nil, fmt.Errorf("oao: table %q 操作 %q 重复", tableKey, a.Key)
 		}
@@ -208,10 +216,15 @@ func resolveActions(tableKey string, actions []Action, columns []ColumnInfo) ([]
 				if f.Name == "" {
 					return nil, nil, fmt.Errorf("oao: table %q 操作 %q 有表单项未填 Name", tableKey, a.Key)
 				}
+				if !validKey(f.Name) {
+					// Name 会进 data-field 属性与 querySelector，限制字符集避免选择器注入
+					return nil, nil, fmt.Errorf("oao: table %q 操作 %q 表单项 %q 只能用字母、数字、下划线、连字符", tableKey, a.Key, f.Name)
+				}
 				fi := FieldInfo{
 					Name: f.Name, Label: orDefault(f.Label, humanize(f.Name)),
 					Kind: orDefaultKind(f.Kind), Widget: f.Widget,
 					Options: f.Options, Required: f.Required, Help: f.Help, Rows: f.Rows,
+					Placeholder: f.Placeholder,
 				}
 				if fi.Widget == WidgetAuto {
 					fi.Widget = defaultFormWidget(fi.Kind, f.Options)
@@ -233,8 +246,8 @@ func resolveActions(tableKey string, actions []Action, columns []ColumnInfo) ([]
 func autoForm(columns []ColumnInfo) []FieldInfo {
 	out := make([]FieldInfo, 0, len(columns))
 	for _, c := range columns {
-		if c.NoEdit {
-			continue
+		if c.NoEdit || c.Hidden {
+			continue // 隐藏列不该出现在编辑表单里（与"不显示"自相矛盾）
 		}
 		switch c.Render {
 		case RenderImage, RenderJSON, RenderCustom, RenderLink:
