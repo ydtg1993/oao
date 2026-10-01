@@ -239,7 +239,14 @@ textarea.oao-input { height: auto; padding: 8px 10px; resize: vertical; line-hei
 }
 .oao-top h1 { font-family: var(--font-display); font-size: 26px; }
 .oao-top-right { display: flex; align-items: center; gap: 12px; }
-.oao-content { flex: 1; padding: 20px 28px 60px; min-width: 0; min-height: 0; overflow: auto; }
+/* 内容区自己不滚：把高度让给子元素，由「表格」或「宿主页面」各自内部滚。
+   这样长表格不会把内容区撑长，筛选栏和分页器始终留在视野里。 */
+.oao-content {
+    flex: 1; min-width: 0; min-height: 0; padding: 20px 28px 24px;
+    display: flex; flex-direction: column; overflow: hidden;
+}
+/* 宿主自己的页面：整块占满并自己滚 */
+.oao-content > .oao-page { flex: 1; min-height: 0; overflow: auto; }
 
 @media (max-width: 720px) {
     .oao-shell { flex-direction: column; }
@@ -284,7 +291,25 @@ textarea.oao-input { height: auto; padding: 8px 10px; resize: vertical; line-hei
 .oao-view th.sortable { cursor: pointer; user-select: none; }
 .oao-view th.sortable:hover { background: var(--primary); color: #111; }
 /* 唯一的横向滚动容器：少了它宽表格会把整页顶开 */
-.oao-view .table-wrap { overflow-x: auto; }
+/* 表格区域自己成为滚动容器：超长纵向滚、超宽横向滚，
+   外层的 .oao-content 就不会被表格撑长（表头也吸顶，滚动时始终可见）。
+   宿主只 render 进一个没有固定高度的容器时，min-height:100% 解析成 auto，
+   退回"自然高度"的老行为，不会出问题。 */
+/* 表格页占满内容区，表格区域再在里面双向滚。
+   宿主若只用 render() 塞进自己的容器、而那个容器没有确定高度，
+   flex:1 不生效，会退回"自然高度"的老行为，不会出问题。 */
+.oao-view { display: flex; flex-direction: column; flex: 1; min-height: 0; box-sizing: border-box; }
+.oao-view > .oao-filters, .oao-view > .oao-pager, .oao-view > .oao-loading, .oao-view > .oao-error { flex: 0 0 auto; }
+.oao-view > .table-wrap {
+    flex: 1 1 auto; min-height: 0;
+    overflow: auto;                                    /* 双向 */
+    max-height: var(--oao-table-max-height, none);     /* 需要硬上限时由宿主给 */
+}
+.oao-view thead th {
+    position: sticky; top: 0; z-index: 2;
+    /* collapse 模式下单元格边框不跟着吸顶，用投影补一条分隔线 */
+    box-shadow: 0 2px 0 0 var(--border-color);
+}
 
 .oao-view .badge {
     display: inline-block; padding: 2px 9px; border: 2px solid var(--border-color);

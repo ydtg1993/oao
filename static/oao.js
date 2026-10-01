@@ -951,10 +951,14 @@ window.Oao = (function () {
                 st.query.page = 1;
                 await load(item.table);
             } else {
+                // 宿主页面单独包一层：它自己滚，不挤占表格页的布局
+                var page = document.createElement('div');
+                page.className = 'oao-page';
+                content.appendChild(page);
                 try {
-                    item.render(content, apiObj);
+                    item.render(page, apiObj);
                 } catch (e) {
-                    content.innerHTML = '<div class="oao-error">页面渲染失败：' + esc(e.message) + '</div>';
+                    page.innerHTML = '<div class="oao-error">页面渲染失败：' + esc(e.message) + '</div>';
                 }
             }
         }
