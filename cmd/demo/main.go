@@ -43,12 +43,16 @@ func main() {
 
 	o, err := oao.New(oao.Config{
 		Logger: stdLogger{},
+		OnAction: func(ev oao.ActionEvent) {
+			// 宿主可以在这里记审计；组件自己什么都不落
+			log.Printf("action %s/%s id=%s err=%v", ev.Table, ev.Action, ev.ID, ev.Err)
+		},
 		Tables: []oao.Table{
 			{
 				Key: "order", Label: "订单管理", Group: "业务",
 				Source: src,
 				Columns: []oao.Column{
-					{Field: "id", Label: "ID", Kind: oao.KindNumber, Width: "70px"},
+					{Field: "id", Label: "ID", Kind: oao.KindNumber, Width: "70px", NoEdit: true},
 					{Field: "order_no", Label: "订单号"},
 					{Field: "status", Label: "状态", Kind: oao.KindNumber, Render: oao.RenderEnum,
 						Enum: map[string]string{"1": "待审", "2": "通过", "3": "驳回"},
@@ -57,7 +61,9 @@ func main() {
 					{Field: "cover", Label: "封面", Render: oao.RenderImage, Size: 56},
 					{Field: "remark", Label: "备注", Render: oao.RenderInput, MaxLen: 30},
 					{Field: "payload", Label: "附加数据", Kind: oao.KindJSON},
-					{Field: "created_at", Label: "创建时间", Kind: oao.KindTime},
+					{Field: "created_at", Label: "创建时间", Kind: oao.KindTime, NoEdit: true},
+					// 不显示，但会下发 —— 操作列用它做乐观锁比对
+					{Field: "updated_at", Label: "更新时间", Kind: oao.KindTime, Hidden: true},
 				},
 				Filters: []oao.Filter{
 					{Field: "order_no", Label: "订单号", Op: oao.OpLike},
@@ -67,6 +73,46 @@ func main() {
 				},
 				DefaultSort: "-id",
 				PageSize:    20,
+				Actions: []oao.Action{
+					// 编辑：表单由列声明推导
+					oao.EditAction(func(ctx context.Context, req oao.ActionRequest) error {
+						return src.update(req.ID, req.Values)
+					}),
+					// 删除：二次确认
+					oao.RemoveAction(func(ctx context.Context, req oao.ActionRequest) error {
+						return src.remove(req.ID)
+					}),
+					// 自定义动作：指定表单字段
+					{
+						Key: "approve", Label: "审核通过", Tone: oao.ToneOK,
+						Confirm: "确认通过该订单？",
+						Handler: func(ctx context.Context, req oao.ActionRequest) error {
+							// 乐观锁：updated_at 是隐藏列（不显示但会下发到前端，操作时原样带回）
+							if was := req.RowString("updated_at"); was != "" {
+								if cur, ok := src.updatedAtOf(req.ID); ok && cur != was {
+									return oao.Fail(http.StatusConflict, "该行已被他人修改，请刷新后重试")
+								}
+							}
+							return src.update(req.ID, map[string]any{"status": 2})
+						},
+					},
+					// 演示业务校验失败：金额为负时用 oao.Fail 指定状态码
+					{
+						Key: "reject", Label: "驳回", Tone: oao.ToneWarn,
+						Form: []oao.Field{
+							{Name: "reason", Label: "驳回原因", Widget: oao.WidgetTextarea, Required: true,
+								Help: "必填，会记进备注"},
+							{Name: "notify", Label: "通知客户", Kind: oao.KindBool},
+						},
+						Handler: func(ctx context.Context, req oao.ActionRequest) error {
+							reason, _ := req.Values["reason"].(string)
+							if strings.TrimSpace(reason) == "" {
+								return oao.Fail(http.StatusBadRequest, "驳回原因不能为空")
+							}
+							return src.update(req.ID, map[string]any{"status": 3, "remark": reason})
+						},
+					},
+				},
 			},
 			{
 				// 极简声明：只给列名，其余全自动推断
@@ -165,14 +211,12 @@ func match(r Order, q oao.Query) bool {
 				return false
 			}
 		case "created_at":
-			lo, hi, ok := strings.Cut(val, "..")
+			// q.Get 拿到带算子的值，DateRange 直接给出半开区间，不用自己补一天
+			from, end, ok := q.Get("created_at").DateRange()
 			if !ok {
 				continue
 			}
-			if t, err := time.ParseInLocation("2006-01-02", lo, time.Local); err == nil && r.CreatedAt.Before(t) {
-				return false
-			}
-			if t, err := time.ParseInLocation("2006-01-02", hi, time.Local); err == nil && r.CreatedAt.After(t.AddDate(0, 0, 1)) {
+			if r.CreatedAt.Before(from) || !r.CreatedAt.Before(end) {
 				return false
 			}
 		}
@@ -181,31 +225,51 @@ func match(r Order, q oao.Query) bool {
 }
 
 func sortRows(rows []Order, sortKey string) {
-	if sortKey == "" {
-		return
-	}
-	desc := strings.HasPrefix(sortKey, "-")
-	name := strings.TrimPrefix(sortKey, "-")
-	less := func(i, j int) bool {
-		switch name {
-		case "order_no":
-			return rows[i].OrderNo < rows[j].OrderNo
-		case "status":
-			return rows[i].Status < rows[j].Status
-		case "amount":
-			return rows[i].Amount < rows[j].Amount
-		case "created_at":
-			return rows[i].CreatedAt.Before(rows[j].CreatedAt)
-		default:
-			return rows[i].ID < rows[j].ID
+	parts := strings.Split(sortKey, ",")
+	// 从优先级最低的键开始排：稳定排序保证后一轮不打乱前一轮的结果
+	for i := len(parts) - 1; i >= 0; i-- {
+		key := strings.TrimSpace(parts[i])
+		if key == "" {
+			continue
 		}
+		desc := strings.HasPrefix(key, "-")
+		name := strings.TrimPrefix(key, "-")
+		sort.SliceStable(rows, func(a, b int) bool {
+			c := compareBy(rows[a], rows[b], name)
+			if desc {
+				return c > 0
+			}
+			return c < 0
+		})
 	}
-	sort.SliceStable(rows, func(i, j int) bool {
-		if desc {
-			return less(j, i)
+}
+
+// compareBy 按字段名比大小；演示用，真项目里这活交给数据库。
+func compareBy(a, b Order, name string) int {
+	switch name {
+	case "order_no":
+		return strings.Compare(a.OrderNo, b.OrderNo)
+	case "status":
+		return a.Status - b.Status
+	case "amount":
+		switch {
+		case a.Amount < b.Amount:
+			return -1
+		case a.Amount > b.Amount:
+			return 1
 		}
-		return less(i, j)
-	})
+		return 0
+	case "created_at":
+		switch {
+		case a.CreatedAt.Before(b.CreatedAt):
+			return -1
+		case a.CreatedAt.After(b.CreatedAt):
+			return 1
+		}
+		return 0
+	default:
+		return a.ID - b.ID
+	}
 }
 
 // seed 造 60 条覆盖各种取值形态的假数据。
@@ -233,3 +297,74 @@ type stdLogger struct{}
 
 func (stdLogger) Infof(format string, args ...any)  { log.Printf(format, args...) }
 func (stdLogger) Errorf(format string, args ...any) { log.Printf(format, args...) }
+
+// update 按字段名改一行（演示用，真项目里换成 UPDATE 语句）。
+func (s *orderSource) update(id string, values map[string]any) error {
+	n, err := strconv.Atoi(id)
+	if err != nil {
+		return oao.Fail(http.StatusBadRequest, "非法的主键：%s", id)
+	}
+	for i := range s.rows {
+		if s.rows[i].ID != n {
+			continue
+		}
+		for name, v := range values {
+			switch name {
+			case "remark":
+				if str, ok := v.(string); ok {
+					s.rows[i].Remark = str
+				}
+			case "status":
+				switch x := v.(type) {
+				case float64: // JSON 数字
+					s.rows[i].Status = int(x)
+				case int:
+					s.rows[i].Status = x
+				}
+			case "amount":
+				if f, ok := v.(float64); ok && f < 0 {
+					return oao.Fail(http.StatusBadRequest, "金额不能为负")
+				}
+				if f, ok := v.(float64); ok {
+					s.rows[i].Amount = f
+				}
+			case "order_no":
+				if str, ok := v.(string); ok {
+					s.rows[i].OrderNo = str
+				}
+			}
+		}
+		s.rows[i].UpdatedAt = time.Now()
+		return nil
+	}
+	return oao.Fail(http.StatusNotFound, "订单 %s 不存在", id)
+}
+
+// updatedAtOf 取某行当前的 updated_at（RFC3339），供乐观锁比对。
+func (s *orderSource) updatedAtOf(id string) (string, bool) {
+	n, err := strconv.Atoi(id)
+	if err != nil {
+		return "", false
+	}
+	for i := range s.rows {
+		if s.rows[i].ID == n {
+			return s.rows[i].UpdatedAt.Format(time.RFC3339Nano), true
+		}
+	}
+	return "", false
+}
+
+// remove 删一行。
+func (s *orderSource) remove(id string) error {
+	n, err := strconv.Atoi(id)
+	if err != nil {
+		return oao.Fail(http.StatusBadRequest, "非法的主键：%s", id)
+	}
+	for i := range s.rows {
+		if s.rows[i].ID == n {
+			s.rows = append(s.rows[:i], s.rows[i+1:]...)
+			return nil
+		}
+	}
+	return oao.Fail(http.StatusNotFound, "订单 %s 不存在", id)
+}

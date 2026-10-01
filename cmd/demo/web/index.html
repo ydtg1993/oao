@@ -8,42 +8,61 @@
     <link rel="stylesheet" href="/static/oao/oao.css">
 </head>
 <body>
-<div class="shell">
-    <aside class="sidebar">
-        <div class="brand">OAO</div>
-        <nav>
-            <div class="nav-section">Demo</div>
-            <div id="menu"></div>
-        </nav>
-    </aside>
-    <main class="content">
-        <header class="content-top">
-            <h1 id="title"></h1>
-        </header>
-        <div id="app"></div>
-    </main>
-</div>
+<div id="app"></div>
 <script src="/static/oao/oao.js"></script>
 <script>
-    async function open(key, label) {
-        document.getElementById('title').textContent = label;
-        document.querySelectorAll('#menu .nav-item').forEach(function (b) {
-            b.classList.toggle('active', b.dataset.key === key);
-        });
-        await Oao.render(document.getElementById('app'), key);
-    }
-    (async function () {
-        Oao.init({ base: '/api/oao' });
-        var tables = await Oao.list();
-        document.getElementById('menu').innerHTML = tables.map(function (t) {
-            return '<button class="nav-item" data-key="' + t.key + '" data-label="' + t.label + '">'
-                + t.label + '</button>';
-        }).join('');
-        document.querySelectorAll('#menu .nav-item').forEach(function (b) {
-            b.onclick = function () { open(b.dataset.key, b.dataset.label); };
-        });
-        if (tables.length) open(tables[0].key, tables[0].label);
-    })();
+    // 演示 Oao.mount：外壳（侧边栏 + 内容区）由组件搭，
+    // 宿主只给「自己的页面 + 两个插槽」。整个 demo 从 30 行缩到十几行。
+    // 鉴权入口：headers 每次请求都回调一次（token 轮换跟得上）；
+    // 收到 401 时问 onUnauthorized，返回 true 就带新凭据重试一次。
+    Oao.init({
+        base: '/api/oao',
+        headers: function () {
+            var token = localStorage.getItem('oao-token');
+            return token ? { 'Authorization': 'Bearer ' + token } : {};
+        },
+        onUnauthorized: async function () {
+            var t = prompt('访问凭据已失效，请重新输入：');
+            if (!t) return false;
+            localStorage.setItem('oao-token', t);
+            return true;           // 已换好凭据，组件会重试一次
+        }
+    });
+
+    Oao.mount(document.getElementById('app'), {
+        title: 'OAO',
+
+        // 右上角插槽：HTML 字符串，也可以传 (el, api) => void 自己挂事件
+        headerRight: '<span class="badge info">demo</span>'
+            + '<span class="oao-avatar">Y</span>',
+
+        // 侧边栏底部插槽
+        sidebarFooter: '<button class="oao-btn" id="theme">☾ 深色</button>',
+
+        // 宿主自己的页面（不是 oao 表格），跟表格一起进菜单
+        pages: [
+            {
+                key: 'welcome', label: '首页', group: '概览',
+                render: function (el, api) {
+                    el.innerHTML = '<div class="card"><h2>这是宿主自己的页面</h2>'
+                        + '<p>由 <code>pages[].render(el, api)</code> 渲染，跟 oao 表格共用同一套外壳。</p>'
+                        + '<p>api 提供 <code>open(key)</code> / <code>reload()</code> / <code>current()</code>。</p>'
+                        + '<button class="oao-btn" id="go">跳到「订单管理」</button></div>';
+                    el.querySelector('#go').onclick = function () { api.open('order'); };
+                }
+            },
+        ],
+
+        onReady: function (api) {
+            var themes = ['light', 'dark'], i = 0;
+            document.getElementById('theme').onclick = function () {
+                i = (i + 1) % 2;
+                document.documentElement.setAttribute('data-theme', themes[i]);
+                this.textContent = themes[i] === 'dark' ? '☀ 浅色' : '☾ 深色';
+            };
+            console.log('布局就绪，当前页:', api.current());
+        }
+    });
 </script>
 </body>
 </html>

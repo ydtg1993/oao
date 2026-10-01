@@ -7,28 +7,68 @@
    独立 demo 下由 demo 自己声明这套 token。
    ============================================================ */
 
-/* ---- 筛选栏 ---- */
+/* ---- 表单控件：按组件库的 Field / Input / Select 规格 ----
+   border-2 + 硬投影 + rounded + focus 描边，尺寸 sm(28) / default(32) */
+.oao-field { display: flex; flex-direction: column; gap: 5px; }
+.oao-field > label,
+.oao-field-label {
+    font-family: var(--font-display); font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .5px; color: var(--muted-foreground);
+}
+.oao-input,
+.oao-select-trigger {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    box-sizing: border-box; height: 32px; padding: 0 10px; min-width: 0;
+    font-family: var(--font-body); font-size: 13px; font-weight: 600;
+    background: var(--card); color: var(--foreground);
+    border: 2px solid var(--border-color);
+    border-radius: var(--oao-radius, 0);
+    box-shadow: 3px 3px 0 0 var(--shadow-color);
+    outline: none; cursor: text;
+}
+.oao-input:focus-visible,
+.oao-select-trigger:focus-visible {
+    outline: 2px solid var(--primary); outline-offset: 2px;
+}
+.oao-input::placeholder { color: var(--muted-foreground); font-weight: 500; }
+.oao-input[type="date"] { padding: 0 8px; }
+textarea.oao-input { height: auto; padding: 8px 10px; resize: vertical; line-height: 1.5; }
+
+/* 下拉触发器 */
+.oao-select-trigger { cursor: pointer; }
+.oao-select-trigger .v { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.oao-select-trigger .v.placeholder { color: var(--muted-foreground); font-weight: 500; }
+.oao-select-trigger .caret { flex-shrink: 0; width: 12px; height: 12px; opacity: .7; }
+
+/* 下拉面板 */
+.oao-select-content {
+    position: fixed; z-index: 1000; max-height: 260px; overflow: auto;
+    background: var(--card); color: var(--foreground);
+    border: 2px solid var(--border-color);
+    border-radius: var(--oao-radius, 0);
+    box-shadow: 5px 5px 0 0 var(--shadow-color);
+    padding: 4px;
+    scrollbar-width: thin;
+}
+.oao-select-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 8px; cursor: pointer; font-size: 13px; font-weight: 600;
+    border-radius: calc(var(--oao-radius, 0px) / 2);
+}
+.oao-select-item:hover, .oao-select-item.hl { background: var(--blue); }
+.oao-select-item.on { background: var(--primary); color: #111; }
+.oao-select-item input[type="checkbox"] { pointer-events: none; }
+.oao-select-empty { padding: 8px; font-size: 12px; color: var(--muted-foreground); }
+
+/* 筛选栏 */
 .oao-filters {
     display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end;
     margin-bottom: 14px;
 }
-.oao-filters .f { display: flex; flex-direction: column; gap: 4px; }
-.oao-filters .f > span {
-    font-family: var(--font-display); font-size: 10px; font-weight: 700;
-    text-transform: uppercase; letter-spacing: .5px; color: var(--muted-foreground);
-}
-.oao-filters .f input, .oao-filters .f select { padding: 6px 8px; font-size: 12px; }
-.oao-filters .f .range { display: flex; gap: 6px; align-items: center; }
-.oao-filters .f .range input { width: 130px; }
-.oao-filters .f .range i { font-style: normal; opacity: .5; }
-.oao-filters .multi {
-    display: flex; flex-wrap: wrap; gap: 10px; max-width: 420px;
-    border: 2px solid var(--border-color); background: var(--card); padding: 6px 10px;
-}
-.oao-filters .multi label {
-    display: flex; align-items: center; gap: 5px;
-    font-size: 12px; font-weight: 600; cursor: pointer; text-transform: none;
-}
+.oao-filters .oao-field { min-width: 140px; }
+.oao-filters .oao-field.range .range { display: flex; gap: 6px; align-items: center; }
+.oao-filters .oao-field.range .oao-input { width: 132px; }
+.oao-filters .oao-field.range i { font-style: normal; opacity: .5; }
 
 /* ---- 表格单元格 ---- */
 /* 文本列默认单行 + 省略号 + 悬停看全文：
@@ -69,3 +109,244 @@
 
 /* ---- 加载 / 空态 ---- */
 .oao-loading { padding: 18px; font-weight: 700; opacity: .6; }
+
+/* ============================================================
+   弹窗 / 表单 / 按钮 / 提示
+   组件自带，只吃宿主的设计 token，不依赖宿主的任何 JS。
+   ============================================================ */
+
+/* ---- 按钮 ---- */
+.oao-btn {
+    display: inline-block; padding: 7px 12px; cursor: pointer;
+    font-family: var(--font-body); font-size: 12px; font-weight: 700;
+    background: var(--card); color: var(--foreground);
+    border: 2px solid var(--border-color); box-shadow: 3px 3px 0 0 var(--shadow-color);
+    transition: transform .08s ease, box-shadow .08s ease;
+}
+.oao-btn:hover { transform: translate(-2px, -2px); box-shadow: 5px 5px 0 0 var(--shadow-color); }
+.oao-btn:active { transform: translate(2px, 2px); box-shadow: none; }
+.oao-btn.danger { background: var(--destructive, #F04F52); color: #fff; }
+.oao-btn.ok { background: var(--green); color: #111; }
+.oao-btn.warn { background: var(--orange); color: #111; }
+.oao-btn.info { background: var(--blue); color: #111; }
+.oao-btn-sm { padding: 4px 9px; box-shadow: 2px 2px 0 0 var(--shadow-color); }
+.oao-actions { display: flex; gap: 6px; white-space: nowrap; }
+
+/* ---- 弹窗 ---- */
+.oao-mask {
+    position: fixed; inset: 0; z-index: 900;
+    background: rgba(17, 17, 17, .45);
+    display: none; align-items: center; justify-content: center; padding: 24px;
+}
+.oao-mask.open { display: flex; }
+.oao-dlg {
+    background: var(--card); border: 2px solid var(--border-color);
+    box-shadow: 8px 8px 0 0 var(--shadow-color);
+    width: 100%; max-width: 520px; max-height: 85vh; overflow: auto; padding: 20px;
+}
+.oao-dlg h3 {
+    margin: 0 0 14px; font-family: var(--font-display); font-size: 15px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .5px;
+    display: inline-block; background: var(--primary); color: #111;
+    border: 2px solid var(--border-color); box-shadow: 3px 3px 0 0 var(--shadow-color);
+    padding: 4px 12px;
+}
+.oao-dlg.danger h3 { background: var(--destructive, #F04F52); color: #fff; }
+.oao-dlg-body { font-size: 14px; line-height: 1.6; }
+.oao-dlg-body p { margin: 0 0 10px; }
+.oao-dlg-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; flex-wrap: wrap; }
+
+/* ---- 表单 ---- */
+.oao-form { display: flex; flex-direction: column; gap: 12px; }
+.oao-field { display: flex; flex-direction: column; gap: 5px; }
+.oao-field > label {
+    font-family: var(--font-display); font-size: 12px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .5px;
+}
+.oao-field > input, .oao-field > select, .oao-field > textarea {
+    padding: 8px 10px; font-family: var(--font-body); font-size: 13px; font-weight: 600;
+    background: var(--card); color: var(--foreground);
+    border: 2px solid var(--border-color); box-shadow: 3px 3px 0 0 var(--shadow-color);
+    outline: none; width: 100%; box-sizing: border-box;
+}
+.oao-field > textarea { font-family: var(--font-mono); resize: vertical; }
+.oao-field > input[type="checkbox"] {
+    width: 18px; height: 18px; padding: 0; align-self: flex-start;
+    appearance: none; -webkit-appearance: none;
+}
+.oao-field > input[type="checkbox"]:checked { background: var(--primary); }
+.oao-field > input[type="checkbox"]:checked::after {
+    content: '✓'; display: block; text-align: center; line-height: 14px; font-weight: 900; color: #111;
+}
+.oao-req { color: var(--destructive, #F04F52); }
+.oao-help { font-size: 12px; color: var(--muted-foreground); }
+.oao-form-err { color: var(--destructive, #F04F52); font-weight: 700; font-size: 12px; margin-top: 8px; min-height: 16px; }
+
+/* ---- Toast ---- */
+.oao-toasts {
+    position: fixed; right: 20px; bottom: 20px; z-index: 950;
+    display: flex; flex-direction: column; gap: 10px; align-items: flex-end; pointer-events: none;
+}
+.oao-toast {
+    pointer-events: auto; background: var(--card); color: #111;
+    border: 2px solid var(--border-color); box-shadow: 4px 4px 0 0 var(--shadow-color);
+    padding: 10px 14px; font-size: 13px; font-weight: 700; font-family: var(--font-body); max-width: 380px;
+}
+.oao-toast { color: var(--foreground); }          /* 无 tone：跟随卡片底色 */
+.oao-toast.ok { background: var(--green); color: #111; }
+.oao-toast.err { background: var(--destructive, #F04F52); color: #fff; }
+
+/* 深色下加深遮罩，让弹窗面板从背景里跳出来 */
+[data-theme="dark"] .oao-mask { background: rgba(0, 0, 0, .68); }
+
+/* ============================================================
+   可选外壳（Oao.mount）
+   自己已有页面框架的宿主不会用到这一段。
+   ============================================================ */
+/* 外壳按视口高度撑满，整页不滚动 —— 超高/超宽都在内部滚 */
+.oao-shell { display: flex; height: 100dvh; min-width: 0; overflow: hidden; }
+.oao-side {
+    width: 210px; flex-shrink: 0; background: var(--background);
+    border-right: 2px solid var(--border-color);
+    padding: 20px 16px; display: flex; flex-direction: column; gap: 14px;
+    overflow-y: auto; /* 菜单长了侧边栏自己滚 */
+}
+.oao-brand {
+    font-family: var(--font-display); font-size: 15px; font-weight: 700;
+    background: var(--primary); color: #111;
+    border: 2px solid var(--border-color); box-shadow: 4px 4px 0 0 var(--shadow-color);
+    padding: 10px 12px; text-align: center;
+}
+.oao-nav { display: flex; flex-direction: column; gap: 10px; }
+.oao-nav .nav-section {
+    font-family: var(--font-display); font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 1px; color: var(--muted-foreground);
+    margin-top: 4px;
+}
+.oao-nav-item {
+    font-family: var(--font-body); font-size: 14px; font-weight: 700; text-align: left;
+    background: var(--card); color: var(--foreground);
+    border: 2px solid var(--border-color); box-shadow: 4px 4px 0 0 var(--shadow-color);
+    padding: 10px 12px; cursor: pointer;
+}
+.oao-nav-item.active { background: var(--primary); color: #111; }
+.oao-side-foot { margin-top: auto; display: flex; flex-direction: column; gap: 10px; }
+.oao-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.oao-top {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 18px 28px 0;
+}
+.oao-top h1 { font-family: var(--font-display); font-size: 26px; }
+.oao-top-right { display: flex; align-items: center; gap: 12px; }
+.oao-content { flex: 1; padding: 20px 28px 60px; min-width: 0; min-height: 0; overflow: auto; }
+
+@media (max-width: 720px) {
+    .oao-shell { flex-direction: column; }
+    .oao-side {
+        width: 100%; flex-direction: row; flex-wrap: wrap; align-items: center;
+        border-right: none; border-bottom: 2px solid var(--border-color);
+    }
+    .oao-nav { flex-direction: row; flex-wrap: wrap; }
+    .oao-side-foot { margin-top: 0; flex-direction: row; }
+}
+
+/* mount 的容器：撑满父级，且允许被压窄 —— 否则宽表格会把整页顶出横向滚动条，
+   右上角插槽也跟着被挤出可视区。宽表格本该在自己的 .table-wrap 里滚。 */
+.oao-host { display: flex; flex: 1; min-width: 0; width: 100%; }
+
+/* ---- 加载失败兜底 ---- */
+.oao-error {
+    padding: 16px; font-weight: 700; color: var(--destructive, #F04F52);
+    border: 2px dashed var(--destructive, #F04F52);
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+
+/* ============================================================
+   表格基础样式
+   作用域收在组件容器内，宿主什么都不用补也能看。
+   宿主可以覆盖（自己定义 .oao-view th 之类），也可以直接提供这些基础样式
+   让两边长得一样 —— 需要的 token 见文件顶部。
+   ============================================================ */
+.oao-view table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.oao-view th, .oao-view td {
+    border: 2px solid var(--border-color); padding: 8px 10px; text-align: left;
+}
+.oao-view th {
+    background: var(--secondary); color: var(--secondary-fg);
+    font-family: var(--font-display); font-weight: 700;
+    text-transform: uppercase; font-size: 11px; letter-spacing: 1px;
+    white-space: nowrap; /* 表头不折行（"重试" 被拆成竖排很难看） */
+}
+.oao-view td { font-family: var(--font-mono); }
+.oao-view tbody tr:nth-child(even) td { background: var(--zebra); }
+.oao-view tbody tr:hover td { background: var(--blue); }
+.oao-view th.sortable { cursor: pointer; user-select: none; }
+.oao-view th.sortable:hover { background: var(--primary); color: #111; }
+/* 唯一的横向滚动容器：少了它宽表格会把整页顶开 */
+.oao-view .table-wrap { overflow-x: auto; }
+
+.oao-view .badge {
+    display: inline-block; padding: 2px 9px; border: 2px solid var(--border-color);
+    font-family: var(--font-display); font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .5px; color: #111; background: var(--primary);
+    white-space: nowrap; /* 徽章文字不折行（"处理中" 被拆成竖排很难看） */
+}
+.oao-view .badge.ok { background: var(--green); }
+.oao-view .badge.warn { background: var(--orange); }
+.oao-view .badge.err { background: var(--destructive, #F04F52); color: #fff; }
+.oao-view .badge.info { background: var(--blue); }
+.oao-view .muted { opacity: .55; font-size: 12px; }
+
+/* ============================================================
+   滚动条：默认隐形，鼠标移到容器上才显形 —— 能拖，但不占视觉
+   ============================================================ */
+.oao-shell, .oao-side, .oao-content,
+.oao-view .table-wrap, .oao-dlg {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;   /* Firefox：默认透明 */
+}
+.oao-side:hover, .oao-content:hover,
+.oao-view .table-wrap:hover, .oao-dlg:hover {
+    scrollbar-color: var(--border-color) transparent;
+}
+/* WebKit：轨道常隐，滑块悬停才显 */
+.oao-side::-webkit-scrollbar,
+.oao-content::-webkit-scrollbar,
+.oao-view .table-wrap::-webkit-scrollbar,
+.oao-dlg::-webkit-scrollbar { width: 10px; height: 10px; }
+.oao-side::-webkit-scrollbar-track,
+.oao-content::-webkit-scrollbar-track,
+.oao-view .table-wrap::-webkit-scrollbar-track,
+.oao-dlg::-webkit-scrollbar-track { background: transparent; }
+.oao-side::-webkit-scrollbar-thumb,
+.oao-content::-webkit-scrollbar-thumb,
+.oao-view .table-wrap::-webkit-scrollbar-thumb,
+.oao-dlg::-webkit-scrollbar-thumb {
+    background: transparent; border: 2px solid transparent; background-clip: padding-box;
+}
+.oao-side:hover::-webkit-scrollbar-thumb,
+.oao-content:hover::-webkit-scrollbar-thumb,
+.oao-view .table-wrap:hover::-webkit-scrollbar-thumb,
+.oao-dlg:hover::-webkit-scrollbar-thumb {
+    background: var(--border-color); border: 2px solid transparent; background-clip: padding-box;
+}
+.oao-side::-webkit-scrollbar-corner,
+.oao-content::-webkit-scrollbar-corner { background: transparent; }
+
+/* Switch：组件库的开关观感（替代裸 checkbox） */
+.oao-switch { display: inline-flex; align-items: center; cursor: pointer; }
+.oao-switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.oao-switch-track {
+    display: inline-block; width: 46px; height: 26px; position: relative;
+    background: var(--card); border: 2px solid var(--border-color);
+    border-radius: var(--oao-radius, 0);
+    box-shadow: 3px 3px 0 0 var(--shadow-color);
+    transition: background .12s ease;
+}
+.oao-switch-track > i {
+    position: absolute; top: 2px; left: 2px; width: 18px; height: 18px;
+    background: var(--border-color); transition: transform .12s ease;
+}
+.oao-switch input:checked + .oao-switch-track { background: var(--primary); }
+.oao-switch input:checked + .oao-switch-track > i { transform: translateX(20px); background: #111; }
+.oao-switch input:focus-visible + .oao-switch-track { outline: 2px solid var(--primary); outline-offset: 2px; }

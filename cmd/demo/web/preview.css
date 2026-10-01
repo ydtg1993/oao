@@ -1,7 +1,7 @@
 /* ============================================================
-   Demo 预览样式 —— 仅本地 demo 用，不随 admin 组件发布。
-   生产环境由宿主（papa 的 mo.css）提供这套 token 与框架壳样式；
-   这里复制一份最小子集，好让 admin 组件脱离 papa 单独跑起来看效果。
+   Demo 预览样式 —— 仅本地 demo 用，不随组件发布。
+   生产环境这套 token 由宿主提供（papa 用的是 mo.css）；
+   这里只留 demo 外壳需要的部分 —— 表格样式 oao.css 自己带了。
    ============================================================ */
 
 :root, [data-theme="light"] {
@@ -35,77 +35,7 @@ body {
 }
 a { color: var(--foreground); }
 
-.shell { display: flex; flex: 1; min-width: 0; }
-.sidebar {
-    width: 210px; flex-shrink: 0; background: var(--background);
-    border-right: var(--border-width) solid var(--border-color);
-    padding: 20px 16px; display: flex; flex-direction: column; gap: 14px;
-}
-.brand {
-    font-family: var(--font-display); font-size: 15px; font-weight: 700;
-    background: var(--primary); color: #111; border: var(--border-width) solid var(--border-color);
-    box-shadow: 4px 4px 0 0 var(--shadow-color); padding: 10px 12px; text-align: center;
-}
-.nav-section {
-    font-family: var(--font-display); font-size: 10px; font-weight: 700;
-    text-transform: uppercase; letter-spacing: 1px; color: var(--muted-foreground);
-}
-#menu { display: flex; flex-direction: column; gap: 10px; }
-.nav-item {
-    font-family: var(--font-body); font-size: 14px; font-weight: 700; text-align: left;
-    background: var(--card); color: var(--foreground);
-    border: var(--border-width) solid var(--border-color);
-    box-shadow: 4px 4px 0 0 var(--shadow-color);
-    padding: 10px 12px; cursor: pointer;
-}
-.nav-item.active { background: var(--primary); color: #111; }
-.content { flex: 1; padding: 26px 28px 60px; min-width: 0; overflow-x: hidden; }
-.content-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; }
-.content-top h1 { font-family: var(--font-display); font-size: 26px; }
-
-table { border-collapse: collapse; width: 100%; font-size: 13px; }
-th, td { border: 2px solid var(--border-color); padding: 8px 10px; text-align: left; }
-th {
-    background: var(--secondary); color: var(--secondary-fg);
-    font-family: var(--font-display); font-weight: 700; text-transform: uppercase;
-    font-size: 11px; letter-spacing: 1px;
-}
-td { font-family: var(--font-mono); }
-tbody tr:nth-child(even) td { background: var(--zebra); }
-tbody tr:hover td { background: var(--blue); }
-th.sortable { cursor: pointer; user-select: none; }
-th.sortable:hover { background: var(--primary); color: #111; }
-.table-wrap { overflow-x: auto; }
-
-.badge {
-    display: inline-block; padding: 2px 9px; border: 2px solid var(--border-color);
-    font-family: var(--font-display); font-size: 11px; font-weight: 700;
-    text-transform: uppercase; letter-spacing: .5px; color: #111; background: var(--primary);
-}
-.badge.ok { background: var(--green); }
-.badge.warn { background: var(--orange); }
-.badge.err { background: var(--destructive); color: #fff; }
-.badge.info { background: var(--blue); }
-.muted { opacity: .55; font-size: 12px; }
-
-input, select, textarea {
-    padding: 9px 10px; border: 2px solid var(--border-color);
-    box-shadow: 3px 3px 0 0 var(--shadow-color);
-    font-family: var(--font-body); font-weight: 600; font-size: 13px;
-    background: var(--card); color: var(--foreground); outline: none;
-}
-input[type="checkbox"] {
-    appearance: none; -webkit-appearance: none; width: 16px; height: 16px; padding: 0;
-    border: 2px solid var(--border-color); box-shadow: 2px 2px 0 0 var(--shadow-color);
-    background: var(--card); cursor: pointer; vertical-align: middle;
-}
-input[type="checkbox"]:checked { background: var(--primary); }
-input[type="checkbox"]:checked::after {
-    content: '✓'; display: block; text-align: center; line-height: 12px; font-size: 12px;
-    font-weight: 900; color: #111;
-}
-
-/* 与 papa mo.css 同名的 tooltip，demo 里也补一份 */
+/* tooltip：oao.js 用 data-tip 属性，样式在宿主这边 */
 [data-tip] { position: relative; cursor: help; }
 [data-tip]:hover::after {
     content: attr(data-tip); position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 400;
@@ -113,4 +43,22 @@ input[type="checkbox"]:checked::after {
     border: 2px solid var(--border-color); box-shadow: 3px 3px 0 0 var(--shadow-color);
     padding: 6px 10px; font-size: 12px; font-weight: 600; font-family: var(--font-mono);
     white-space: pre-wrap; word-break: break-all; max-width: 420px; width: max-content;
+}
+
+/* demo 自己的页面内容（宿主页面会用到，组件不提供） */
+.card {
+    background: var(--card); border: 2px solid var(--border-color);
+    box-shadow: 4px 4px 0 0 var(--shadow-color); padding: 18px; max-width: 560px;
+}
+.card h2 { font-family: var(--font-display); font-size: 15px; margin-bottom: 10px; }
+.card p { margin: 6px 0; font-size: 14px; }
+.card code {
+    font-family: var(--font-mono); font-size: 12px;
+    background: var(--muted-fill); padding: 1px 5px;
+}
+.oao-avatar {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; font-weight: 900;
+    background: var(--primary); color: #111;
+    border: 2px solid var(--border-color); box-shadow: 2px 2px 0 0 var(--shadow-color);
 }

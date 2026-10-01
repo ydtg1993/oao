@@ -52,15 +52,19 @@ const (
 	OpLt      Op = "lt"      // 小于
 )
 
-// Widget 前端筛选控件；WidgetAuto 表示按 Op 推断。
+// Widget 前端筛选 / 表单控件；WidgetAuto 表示按类型推断。
 type Widget string
 
 const (
 	WidgetAuto      Widget = ""
-	WidgetInput     Widget = "input"
-	WidgetSelect    Widget = "select"
-	WidgetDate      Widget = "date"
-	WidgetDateRange Widget = "daterange"
+	WidgetInput     Widget = "input"     // 单行文本
+	WidgetNumber    Widget = "number"    // 数字
+	WidgetTextarea  Widget = "textarea"  // 多行文本
+	WidgetSelect    Widget = "select"    // 下拉
+	WidgetSwitch    Widget = "switch"    // 开关
+	WidgetDate      Widget = "date"      // 日期
+	WidgetDateRange Widget = "daterange" // 日期区间（仅筛选用）
+	WidgetMulti     Widget = "multi"     // 多选（仅筛选用）
 )
 
 // Tone 徽章 / 按钮的语义色。

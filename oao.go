@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net/http"
 	"sort"
+	"strings"
 )
 
 //go:embed static
@@ -32,6 +33,10 @@ type Config struct {
 
 	// Prefix API 前缀，默认 "/api/oao"。
 	Prefix string
+
+	// OnAction 每次操作转发结束时回调（成功与失败都调），宿主可用它记审计日志。
+	// 组件自己不落任何存储 —— 要不要记、记到哪，由宿主决定。
+	OnAction func(ActionEvent)
 }
 
 // Oao 表格组件。宿主负责 Mount 路由、把 StaticFS 挂到静态资源路径。
@@ -49,11 +54,21 @@ func New(cfg Config) (*Oao, error) {
 	if cfg.Prefix == "" {
 		cfg.Prefix = "/api/oao"
 	}
+	if !strings.HasPrefix(cfg.Prefix, "/") {
+		// 少了前导斜杠路由会静默不生效，不如直接报错
+		return nil, fmt.Errorf("oao: Prefix %q 必须以 / 开头", cfg.Prefix)
+	}
+	if strings.HasSuffix(cfg.Prefix, "/") {
+		return nil, fmt.Errorf("oao: Prefix %q 不能以 / 结尾", cfg.Prefix)
+	}
 	o := &Oao{byKey: make(map[string]*TableInfo, len(cfg.Tables)), cfg: cfg}
 
 	for _, t := range cfg.Tables {
 		if err := validate(t); err != nil {
 			return nil, err
+		}
+		if _, dup := o.byKey[t.Key]; dup {
+			return nil, fmt.Errorf("oao: table key %q 重复", t.Key)
 		}
 		info, err := t.resolve()
 		if err != nil {
@@ -62,8 +77,8 @@ func New(cfg Config) (*Oao, error) {
 		o.tables = append(o.tables, info)
 		o.byKey[info.Key] = info
 		if cfg.Logger != nil {
-			cfg.Logger.Infof("oao: table %q registered (columns=%d, filters=%d)",
-				info.Key, len(info.Columns), len(info.Filters))
+			cfg.Logger.Infof("oao: table %q registered (columns=%d, filters=%d, actions=%d)",
+				info.Key, len(info.Columns), len(info.Filters), len(info.Actions))
 		}
 	}
 	sort.Slice(o.tables, func(i, j int) bool { return o.tables[i].Key < o.tables[j].Key })
@@ -74,6 +89,13 @@ func New(cfg Config) (*Oao, error) {
 func validate(t Table) error {
 	if t.Key == "" {
 		return errors.New("oao: table key 不能为空")
+	}
+	if t.Key == "tables" {
+		// 与表格清单接口 {prefix}/tables 冲突，这样的表永远访问不到
+		return errors.New(`oao: table key "tables" 是保留字（与 {prefix}/tables 接口冲突）`)
+	}
+	if !validKey(t.Key) {
+		return fmt.Errorf("oao: table key %q 只能用字母、数字、下划线、连字符", t.Key)
 	}
 	if t.Source == nil {
 		return fmt.Errorf("oao: table %q 缺少 Source", t.Key)
@@ -103,12 +125,16 @@ func validate(t Table) error {
 		}
 	}
 	if t.DefaultSort != "" {
-		name := t.DefaultSort
-		if len(name) > 0 && name[0] == '-' {
-			name = name[1:]
-		}
-		if !seen[name] {
-			return fmt.Errorf("oao: table %q 的 DefaultSort %q 不是已声明的列", t.Key, t.DefaultSort)
+		// 支持多字段："-status,amount" —— 逐个剥掉前导 - 再校验
+		for _, part := range strings.Split(t.DefaultSort, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			name := strings.TrimPrefix(part, "-")
+			if !seen[name] {
+				return fmt.Errorf("oao: table %q 的 DefaultSort %q 里有未声明的列 %q", t.Key, t.DefaultSort, name)
+			}
 		}
 	}
 	return nil
@@ -128,3 +154,16 @@ func (o *Oao) Prefix() string { return o.cfg.Prefix }
 
 // StaticFS 返回静态资源文件系统，供宿主挂到静态资源路径。
 func (o *Oao) StaticFS() (fs.FS, error) { return fs.Sub(staticFS, "static") }
+
+// validKey 表 key 要直接进 URL 路径，限制成 URL 安全字符，避免编码/路由上的意外。
+func validKey(s string) bool {
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '_' || r == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}

@@ -308,3 +308,34 @@ func TestEmptyFiltersSerializeAsArray(t *testing.T) {
 		t.Fatalf("序列化结果 = %s, want filters 为空数组", b)
 	}
 }
+
+// 新增的一批校验：key 保留字 / URL 安全 / 重复 key / Prefix
+func TestNewValidatesKeysAndPrefix(t *testing.T) {
+	src := &fakeSource{}
+	col := []Column{{Field: "a"}}
+	cases := []struct {
+		name string
+		cfg  Config
+	}{
+		{"key 为保留字 tables", Config{Tables: []Table{{Key: "tables", Source: src, Columns: col}}}},
+		{"key 带斜杠", Config{Tables: []Table{{Key: "a/b", Source: src, Columns: col}}}},
+		{"key 带空格", Config{Tables: []Table{{Key: "a b", Source: src, Columns: col}}}},
+		{"key 带中文", Config{Tables: []Table{{Key: "订单", Source: src, Columns: col}}}},
+		{"key 重复", Config{Tables: []Table{
+			{Key: "dup", Source: src, Columns: col},
+			{Key: "dup", Source: src, Columns: col},
+		}}},
+		{"Prefix 缺前导斜杠", Config{Prefix: "api/oao", Tables: []Table{{Key: "t", Source: src, Columns: col}}}},
+		{"Prefix 多余结尾斜杠", Config{Prefix: "/api/oao/", Tables: []Table{{Key: "t", Source: src, Columns: col}}}},
+	}
+	for _, c := range cases {
+		if _, err := New(c.cfg); err == nil {
+			t.Fatalf("%s：应当报错", c.name)
+		}
+	}
+
+	// 合法的仍要通过
+	if _, err := New(Config{Tables: []Table{{Key: "order_2026-x", Source: src, Columns: col}}}); err != nil {
+		t.Fatalf("合法的 key 不该被拒：%v", err)
+	}
+}
