@@ -433,19 +433,85 @@ func TestNameValidation(t *testing.T) {
 
 // Tables()/Table() 返回副本：调用方改了不影响内部状态（那些字段服务端也在读）。
 func TestTablesReturnsCopy(t *testing.T) {
+	noop := func(context.Context, ActionRequest) error { return nil }
 	o, _ := New(Config{Tables: []Table{{
-		Key: "t", Source: &fakeSource{}, Columns: []Column{{Field: "a", Label: "原始"}},
+		Key: "t", Source: &fakeSource{},
+		Columns: []Column{
+			{Field: "id", Kind: KindNumber, NoEdit: true},
+			{Field: "a", Label: "原始"},
+			{Field: "status", Kind: KindNumber, Render: RenderEnum,
+				Enum: map[string]string{"1": "待审"}, Tone: map[string]string{"1": "warn"}},
+		},
+		Filters: []Filter{{Field: "a", Op: OpIn, Options: map[string]string{"x": "甲"}}},
+		Actions: []Action{{Key: "go", Label: "走", Handler: noop,
+			Form: []Field{{Name: "reason", Options: map[string]string{"p": "丙"}}}}},
 	}}})
+
 	got := o.Tables()
-	got[0].Columns[0].Label = "被改了"
+	// 外层切片
+	got[0].Columns[1].Label = "被改了"
 	got[0].Filters = append(got[0].Filters, FilterInfo{Name: "x"})
+	// 嵌套的 map / 切片 —— 曾经的漏洞：这些和内部共享同一个引用
+	got[0].Columns[2].Enum["1"] = "被改了"
+	got[0].Columns[2].Tone["1"] = "被改了"
+	got[0].Filters[0].Options["x"] = "被改了"
+	got[0].Actions[0].Form[0].Options["p"] = "被改了"
+	got[0].Actions[0].Form = append(got[0].Actions[0].Form, FieldInfo{Name: "extra"})
 
 	fresh, _ := o.Table("t")
-	if fresh.Columns[0].Label != "原始" {
-		t.Fatalf("内部元数据被外部改动了：%q", fresh.Columns[0].Label)
+	if fresh.Columns[1].Label != "原始" {
+		t.Fatalf("内部元数据被外部改动了：%q", fresh.Columns[1].Label)
 	}
-	if len(fresh.Filters) != 0 {
+	if fresh.Columns[2].Enum["1"] != "待审" || fresh.Columns[2].Tone["1"] != "warn" {
+		t.Fatalf("Enum/Tone 被外部改动了：%v / %v", fresh.Columns[2].Enum, fresh.Columns[2].Tone)
+	}
+	if fresh.Filters[0].Options["x"] != "甲" {
+		t.Fatalf("Filter Options 被外部改动了：%v", fresh.Filters[0].Options)
+	}
+	if len(fresh.Filters) != 1 {
 		t.Fatalf("内部 Filters 被外部改动了：%v", fresh.Filters)
+	}
+	if len(fresh.Actions[0].Form) != 1 || fresh.Actions[0].Form[0].Options["p"] != "丙" {
+		t.Fatalf("Action Form 被外部改动了：%+v", fresh.Actions[0].Form)
+	}
+}
+
+// RemoveAction 是内置动作，Key / Label / Tone / Confirm 都是约定值，写错没有别的地方能拦住。
+func TestRemoveActionDefaults(t *testing.T) {
+	a := RemoveAction(func(context.Context, ActionRequest) error { return nil })
+	if a.Key != "remove" || a.Label != "删除" || a.Tone != ToneErr || a.Confirm == "" {
+		t.Fatalf("RemoveAction = %+v", a)
+	}
+
+	_, o := newTestServer(t, Table{Key: "t", Source: &fakeSource{},
+		Columns: []Column{{Field: "id", Kind: KindNumber}}, Actions: []Action{a}})
+	info, _ := o.Table("t")
+	if len(info.Actions) != 1 {
+		t.Fatalf("actions = %+v", info.Actions)
+	}
+	if got := info.Actions[0]; got.Key != "remove" || got.Confirm == "" || len(got.Form) != 0 {
+		t.Fatalf("动作元数据 = %+v", got)
+	}
+}
+
+// StaticFS 是宿主挂静态资源的入口：embed 路径写错的话这里就是空的。
+func TestStaticFSContainsAssets(t *testing.T) {
+	_, o := newTestServer(t, Table{Key: "t", Source: &fakeSource{},
+		Columns: []Column{{Field: "a"}}})
+	fsys, err := o.StaticFS()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"oao.js", "oao.css"} {
+		f, err := fsys.Open(name)
+		if err != nil {
+			t.Fatalf("%s 不在 StaticFS 里: %v", name, err)
+		}
+		st, statErr := f.Stat()
+		f.Close()
+		if statErr != nil || st.Size() == 0 {
+			t.Fatalf("%s 是空的（size=%v err=%v）", name, st, statErr)
+		}
 	}
 }
 

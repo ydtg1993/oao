@@ -2,6 +2,7 @@ package oao
 
 import (
 	"fmt"
+	"maps"
 	"strings"
 )
 
@@ -223,15 +224,41 @@ func (t Table) resolve() (*TableInfo, error) {
 	return info, nil
 }
 
-// clone 浅拷贝一份元数据（切片也复制），让外部拿不到内部可变状态。
-// 未导出的那几个字段是只读引用，拷过去无妨。
+// clone 深拷贝一份元数据，让外部拿不到内部可变状态。
+// **嵌套的 map / 切片也要复制**：只复制外层切片的话，Enum / Tone / Options / Form
+// 仍与内部共享引用 —— 宿主改一下就会污染后续所有响应，和服务端的序列化并发时
+// 还会撞 Go 的 concurrent map read/write。
+// （未导出的那几个字段是只读引用，包外改不到，拷过去无妨。）
 func (t *TableInfo) clone() *TableInfo {
 	c := *t
+
 	c.Columns = cloneSlice(t.Columns)
+	for i := range c.Columns {
+		c.Columns[i].Enum = maps.Clone(c.Columns[i].Enum)
+		c.Columns[i].Tone = maps.Clone(c.Columns[i].Tone)
+	}
+
 	c.Filters = cloneSlice(t.Filters)
+	for i := range c.Filters {
+		c.Filters[i].Options = maps.Clone(c.Filters[i].Options)
+	}
+
 	c.Actions = cloneSlice(t.Actions)
+	for i := range c.Actions {
+		c.Actions[i].Form = cloneFieldInfos(c.Actions[i].Form)
+	}
+
 	c.PageSizes = cloneSlice(t.PageSizes)
 	return &c
+}
+
+// cloneFieldInfos 复制表单字段（连同各自的 Options 映射）。
+func cloneFieldInfos(in []FieldInfo) []FieldInfo {
+	out := cloneSlice(in)
+	for i := range out {
+		out[i].Options = maps.Clone(out[i].Options)
+	}
+	return out
 }
 
 // cloneSlice 复制切片并**保留"非 nil 空切片"语义** ——

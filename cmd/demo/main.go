@@ -363,20 +363,6 @@ func (s *orderSource) approveIfUnchanged(id, was string) error {
 	return oao.Fail(http.StatusNotFound, "订单 %s 不存在", id)
 }
 
-// updatedAtOf 取某行当前的 updated_at（RFC3339），供乐观锁比对。
-func (s *orderSource) updatedAtOf(id string) (string, bool) {
-	n, err := strconv.Atoi(id)
-	if err != nil {
-		return "", false
-	}
-	for i := range s.rows {
-		if s.rows[i].ID == n {
-			return s.rows[i].UpdatedAt.Format(time.RFC3339Nano), true
-		}
-	}
-	return "", false
-}
-
 // remove 删一行。
 func (s *orderSource) remove(id string) error {
 	n, err := strconv.Atoi(id)
