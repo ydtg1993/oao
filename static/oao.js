@@ -271,11 +271,50 @@ window.Oao = (function () {
     }
 
     /* ---------- 操作列 ---------- */
+    // 超过这个数量的动作会收进「更多」，否则行内会被按钮淹掉
+    var MAX_FLAT_ACTIONS = 3;
+
+    function actionButton(a, rowIdx) {
+        return '<button class="oao-btn oao-btn-sm ' + esc(a.tone || '') + '" data-action="' + esc(a.key)
+            + '" data-row="' + rowIdx + '">' + esc(a.label) + '</button>';
+    }
+
     function actionColumn(meta, rowIdx) {
-        return '<div class="oao-actions">' + meta.actions.map(function (a) {
-            return '<button class="oao-btn oao-btn-sm ' + esc(a.tone || '') + '" data-action="' + esc(a.key)
-                + '" data-row="' + rowIdx + '">' + esc(a.label) + '</button>';
-        }).join('') + '</div>';
+        var acts = meta.actions || [];
+        var head = '';
+        if (acts.length > MAX_FLAT_ACTIONS) {
+            // 前两个平铺，其余进「更多」——常用的还在手边，少用的不占地方
+            head = '<button class="oao-btn oao-btn-sm" data-more="' + rowIdx + '">更多 ▾</button>';
+            acts = acts.slice(0, 2);
+        }
+        return '<div class="oao-actions">'
+            + acts.map(function (a) { return actionButton(a, rowIdx); }).join('')
+            + head + '</div>';
+    }
+
+    /** 「更多」面板：列出被收起的动作，点一项走同一个 runAction */
+    function openActionMenu(trigger, st, rowIdx) {
+        var more = (st.meta.actions || []).slice(2);
+        Popup.open({
+            trigger: trigger,
+            itemSel: '.oao-select-item',
+            enterPicks: true,
+            closeOnPick: true,
+            render: function (panel, hl) {
+                panel.innerHTML = more.map(function (a, i) {
+                    return '<div class="oao-select-item' + (i === hl ? ' hl' : '') + '" role="menuitem" data-i="' + i + '">'
+                        + '<span class="dot ' + esc(a.tone || '') + '"></span>'
+                        + '<span>' + esc(a.label) + '</span></div>';
+                }).join('');
+            },
+            onPick: function (i) {
+                var a = more[i];
+                if (!a) return;
+                // 面板先收掉再跑：动作可能弹确认/表单框，别和它叠在一起
+                Popup.close(false);
+                runAction(st.meta, a, st.rows[rowIdx]);
+            },
+        });
     }
 
     /** 打开表单弹窗：resolve 表单值对象；取消 / Esc 返回 null */
@@ -389,7 +428,11 @@ window.Oao = (function () {
         + '<path d="M2 4.5 L6 8.5 L10 4.5" fill="none" stroke="currentColor" stroke-width="2"/>'
         + '</svg>';
 
-    var Select = (function () {
+    /* ---------- 弹出面板（Select 与「更多」操作共用） ----------
+       只负责面板本体：贴触发器定位、点外部/Esc 关闭、↑↓ 高亮、resize/scroll 重定位、
+       以及条目的通用鼠标交互（mousedown 选中、hover 高亮）。
+       具体渲染与语义由调用方给：{ trigger, itemSel, render(panel, hl), onPick(i), closeOnPick, enterPicks } */
+    var Popup = (function () {
         var panel = null, cur = null, hl = -1;
 
         function ensure() {
@@ -407,7 +450,7 @@ window.Oao = (function () {
                 if (e.key === 'Escape') { e.preventDefault(); close(true); }
                 else if (e.key === 'ArrowDown') { e.preventDefault(); move(1); }
                 else if (e.key === 'ArrowUp') { e.preventDefault(); move(-1); }
-                else if (e.key === 'Enter' && !cur.multiple) { e.preventDefault(); pick(hl); }
+                else if (e.key === 'Enter' && cur.enterPicks) { e.preventDefault(); pick(hl); }
             });
             window.addEventListener('resize', function () { if (cur) place(); });
             window.addEventListener('scroll', function () { if (cur) place(); }, true);
@@ -426,6 +469,80 @@ window.Oao = (function () {
             }
         }
 
+        function items() { return cur ? panel.querySelectorAll(cur.itemSel) : []; }
+
+        /** render 重画面板内容，并给条目接上通用交互 */
+        function render() {
+            if (!cur) return;
+            cur.render(panel, hl);
+            items().forEach(function (el) {
+                el.addEventListener('mousedown', function (e) {
+                    e.preventDefault();  // 别让触发器失焦
+                    // mousedown 后可能重建面板节点，若不拦住冒泡，
+                    // document 上的"点外部关闭"会因 target 已脱离 DOM 而误判
+                    e.stopPropagation();
+                    pick(parseInt(el.getAttribute('data-i'), 10));
+                });
+                el.addEventListener('mouseenter', function () {
+                    hl = parseInt(el.getAttribute('data-i'), 10);
+                    items().forEach(function (x) { x.classList.remove('hl'); });
+                    el.classList.add('hl');
+                });
+            });
+        }
+
+        function pick(i) {
+            if (!cur) return;
+            var state = cur;
+            state.onPick(i);
+            if (state.closeOnPick) close(true);
+            else if (cur === state) render(); // 多选：原地重画，面板不关
+        }
+
+        function move(step) {
+            var list = items();
+            if (!list.length) return;
+            hl = (hl + step + list.length) % list.length;
+            list.forEach(function (el, i) { el.classList.toggle('hl', i === hl); });
+            var hit = panel.querySelector('.hl');
+            if (hit && hit.scrollIntoView) hit.scrollIntoView({ block: 'nearest' });
+        }
+
+        function open(state) {
+            ensure();
+            if (cur) close(false);
+            cur = state;
+            hl = -1;
+            panel.hidden = false;
+            state.trigger.setAttribute('aria-expanded', 'true');
+            render();
+            place();
+            if (state.trigger.focus) state.trigger.focus();
+        }
+
+        function close(refocus) {
+            if (!cur) return;
+            var trigger = cur.trigger;
+            panel.hidden = true;
+            cur = null;
+            hl = -1;
+            if (trigger) {
+                trigger.setAttribute('aria-expanded', 'false');
+                if (refocus && trigger.focus) trigger.focus();
+            }
+        }
+
+        return {
+            open: open,
+            close: close,
+            /** 面板开着时原地重画（多选改值后用） */
+            refresh: function () { if (cur) { render(); place(); } },
+            /** 判断某个触发器对应的面板是不是开着 */
+            isOpen: function (trigger) { return !!cur && cur.trigger === trigger; },
+        };
+    })();
+
+    var Select = (function () {
         function labelOf(o) {
             if (o.multiple) {
                 var picked = o.options.filter(function (x) { return o.value.indexOf(String(x.value)) > -1; });
@@ -439,7 +556,7 @@ window.Oao = (function () {
 
         function renderTrigger(state) {
             var v = state.trigger.querySelector('.v');
-            state.trigger.setAttribute('aria-expanded', String(cur === state));
+            state.trigger.setAttribute('aria-expanded', String(Popup.isOpen(state.trigger)));
             if (!v) return;
             var text = labelOf(state);
             v.textContent = text || state.placeholder || '全部';
@@ -452,89 +569,23 @@ window.Oao = (function () {
                 : String(opt.value) === String(state.value);
         }
 
-        function render() {
-            var o = cur;
-            if (!o.options.length) {
+        function renderItems(state, panel, hl) {
+            if (!state.options.length) {
                 panel.innerHTML = '<div class="oao-select-empty">没有选项</div>';
                 return;
             }
-            panel.innerHTML = o.options.map(function (opt, i) {
-                var on = isOn(o, opt);
+            panel.innerHTML = state.options.map(function (opt, i) {
+                var on = isOn(state, opt);
                 return '<div class="oao-select-item' + (on ? ' on' : '') + (i === hl ? ' hl' : '')
                     + '" role="option" data-i="' + i + '" aria-selected="' + on + '">'
-                    + (o.multiple ? '<input type="checkbox" tabindex="-1"' + (on ? ' checked' : '') + '>' : '')
+                    + (state.multiple ? '<input type="checkbox" tabindex="-1"' + (on ? ' checked' : '') + '>' : '')
                     + '<span>' + esc(opt.label) + '</span></div>';
             }).join('');
-            panel.querySelectorAll('.oao-select-item').forEach(function (el) {
-                el.addEventListener('mousedown', function (e) {
-                    e.preventDefault();  // 别让触发器失焦
-                    // 多选时 pick 会重建面板节点，若不拦住冒泡，
-                    // document 上的"点外部关闭"会因 target 已脱离 DOM 而误判
-                    e.stopPropagation();
-                    pick(parseInt(el.getAttribute('data-i'), 10));
-                });
-                el.addEventListener('mouseenter', function () {
-                    hl = parseInt(el.getAttribute('data-i'), 10);
-                    panel.querySelectorAll('.oao-select-item').forEach(function (x) { x.classList.remove('hl'); });
-                    el.classList.add('hl');
-                });
-            });
-        }
-
-        function pick(i) {
-            var o = cur, opt = o.options[i];
-            if (!opt) return;
-            if (o.multiple) {
-                var v = o.value.slice();
-                var at = v.indexOf(String(opt.value));
-                if (at > -1) v.splice(at, 1); else v.push(String(opt.value));
-                o.value = v;
-                renderTrigger(o);
-                render();
-                o.onChange(v);
-            } else {
-                o.value = String(opt.value);
-                renderTrigger(o);
-                o.onChange(o.value);
-                close(true);
-            }
-        }
-
-        function move(step) {
-            if (!cur.options.length) return;
-            hl = (hl + step + cur.options.length) % cur.options.length;
-            render();
-            var el = panel.querySelector('.oao-select-item.hl');
-            if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
-        }
-
-        function open(state) {
-            ensure();
-            if (cur) close(false);
-            cur = state;
-            hl = -1;
-            panel.hidden = false;
-            renderTrigger(state);
-            render();
-            place();
-            state.trigger.focus();
-        }
-
-        function close(refocus) {
-            if (!cur) return;
-            var trigger = cur.trigger;
-            panel.hidden = true;
-            cur = null;
-            if (trigger) {
-                trigger.setAttribute('aria-expanded', 'false');
-                if (refocus) trigger.focus();
-            }
         }
 
         return {
             /** attach 把触发器接成下拉；value 单选为字符串、多选为字符串数组 */
             attach: function (trigger, opts) {
-                ensure();
                 var state = {
                     trigger: trigger,
                     options: opts.options || [],
@@ -542,29 +593,50 @@ window.Oao = (function () {
                     multiple: !!opts.multiple,
                     placeholder: opts.placeholder,
                     onChange: opts.onChange || function () {},
+                    itemSel: '.oao-select-item',
+                    enterPicks: !opts.multiple,   // 多选时 Enter 不用来选中
+                    closeOnPick: !opts.multiple,
+                    render: function (panel, hl) {
+                        renderTrigger(state);
+                        renderItems(state, panel, hl);
+                    },
+                    onPick: function (i) {
+                        var opt = state.options[i];
+                        if (!opt) return;
+                        if (state.multiple) {
+                            var v = state.value.slice();
+                            var at = v.indexOf(String(opt.value));
+                            if (at > -1) v.splice(at, 1); else v.push(String(opt.value));
+                            state.value = v;
+                            state.onChange(v);
+                        } else {
+                            state.value = String(opt.value);
+                            state.onChange(state.value);
+                        }
+                    },
                 };
                 trigger.__oaoSelect = state; // 重绘后重新 attach 时复用它
                 if (!trigger.__oaoBound) {
                     trigger.__oaoBound = true;
-                trigger.setAttribute('aria-haspopup', 'listbox');
-                trigger.setAttribute('aria-expanded', 'false');
+                    trigger.setAttribute('aria-haspopup', 'listbox');
+                    trigger.setAttribute('aria-expanded', 'false');
                     trigger.addEventListener('click', function (e) {
                         e.preventDefault();
                         e.stopPropagation();
-                        if (cur && cur.trigger === trigger) close(true);
-                        else open(trigger.__oaoSelect);
+                        if (Popup.isOpen(trigger)) Popup.close(true);
+                        else Popup.open(state);
                     });
                     trigger.addEventListener('keydown', function (e) {
                         if (e.key === 'Enter' || e.key === ' ') {
                             e.preventDefault();
                             e.stopPropagation(); // 否则 document 上的 Enter 分支会再选一次（此时 hl 还是 -1）
-                            open(trigger.__oaoSelect);
+                            Popup.open(state);
                         }
                     });
                 }
                 renderTrigger(state);
             },
-            close: function () { close(false); },
+            close: function () { Popup.close(false); },
         };
     })();
 
@@ -823,6 +895,13 @@ window.Oao = (function () {
                 var action = (st.meta.actions || []).filter(function (a) { return a.key === key2; })[0];
                 if (!action) return;
                 runAction(st.meta, action, st.rows[parseInt(b.getAttribute('data-row'), 10)]);
+            };
+        });
+        root.querySelectorAll('[data-more]').forEach(function (b) {
+            b.onclick = function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                openActionMenu(b, st, parseInt(b.getAttribute('data-more'), 10));
             };
         });
         root.querySelectorAll('[data-go]').forEach(function (b) {

@@ -38,6 +38,16 @@ textarea.oao-input { height: auto; padding: 8px 10px; resize: vertical; line-hei
 .oao-select-trigger { cursor: pointer; }
 .oao-select-trigger .v { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .oao-select-trigger .v.placeholder { color: var(--muted-foreground); font-weight: 500; }
+
+/* 操作列「更多」面板里的语义色小点（ok/warn/err/info） */
+.oao-select-item .dot {
+    flex-shrink: 0; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--muted-foreground);
+}
+.oao-select-item .dot.ok { background: var(--green); }
+.oao-select-item .dot.warn { background: var(--orange); }
+.oao-select-item .dot.err { background: var(--destructive); }
+.oao-select-item .dot.info { background: var(--blue); }
 .oao-select-trigger .caret { flex-shrink: 0; width: 12px; height: 12px; opacity: .7; }
 
 /* 下拉面板 */
