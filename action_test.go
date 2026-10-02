@@ -219,6 +219,10 @@ func TestOnActionCalledForBothOutcomes(t *testing.T) {
 	if events[0].At.IsZero() {
 		t.Fatal("事件应带时间戳")
 	}
+	// 事件要带上触发它的请求，宿主才能从上下文里取身份（审计记人）
+	if events[0].Req == nil {
+		t.Fatal("事件应带 Req")
+	}
 }
 
 func TestActionRequestMethodAndBody(t *testing.T) {
@@ -395,5 +399,41 @@ func TestDefaultSortMultiField(t *testing.T) {
 		DefaultSort: "id,nope",
 	}}}); err == nil {
 		t.Fatal("DefaultSort 里有未声明的列应当报错")
+	}
+}
+
+// 宿主的鉴权中间件写进请求上下文的身份，必须能从 OnAction 的 ev.Req 里读回来 ——
+// 这是「审计记人」依赖的那条链路（组件不解释身份，只把请求带出来）。
+func TestOnActionEventCarriesRequestContext(t *testing.T) {
+	type ctxKey struct{}
+	var got string
+	o, err := New(Config{
+		Tables: []Table{{
+			Key: "t", Source: &fakeSource{},
+			Columns: []Column{{Field: "id", Kind: KindNumber}},
+			Actions: []Action{{Key: "go", Handler: func(context.Context, ActionRequest) error { return nil }}},
+		}},
+		Auth: func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, "张三")))
+			})
+		},
+		OnAction: func(ev ActionEvent) {
+			if ev.Req != nil {
+				got, _ = ev.Req.Context().Value(ctxKey{}).(string)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	o.Mount(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	postAction(t, srv.URL+"/api/oao/t/action/go", `{"id":"1"}`)
+	if got != "张三" {
+		t.Fatalf("从 ev.Req 的上下文里读到 %q, want 张三", got)
 	}
 }

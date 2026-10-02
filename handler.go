@@ -92,6 +92,7 @@ func (o *Oao) handleAction(w http.ResponseWriter, r *http.Request) {
 		o.safeOnAction(ActionEvent{
 			Table: key, Action: actionKey, ID: body.ID, Values: req.Values,
 			Err: err, IP: clientIP(r), At: time.Now(),
+			Req: r, // 宿主可从它取上下文里的身份（组件不解释）
 		})
 	}
 

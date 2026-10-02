@@ -153,6 +153,11 @@ type ActionEvent struct {
 	Err    error // nil 表示业务处理器返回成功
 	IP     string
 	At     time.Time
+
+	// Req 触发这次操作的请求，与 ActionRequest.Req 同一套逃生舱约定：
+	// 组件不解释它，宿主自己读（典型用途是取鉴权中间件写进上下文里的「操作人」，
+	// 审计才能记下是谁干的）。**只读，别在回调里写响应。**
+	Req *http.Request
 }
 
 // ActionError 业务可以用它指定返回给前端的 HTTP 状态码与提示语。
