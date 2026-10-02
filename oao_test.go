@@ -448,3 +448,78 @@ func TestTablesReturnsCopy(t *testing.T) {
 		t.Fatalf("内部 Filters 被外部改动了：%v", fresh.Filters)
 	}
 }
+
+// 主键字段：默认 id、可改；声明了 Actions 时它必须是声明过的列（否则前端定位不到目标行）。
+func TestIDFieldContract(t *testing.T) {
+	src := &fakeSource{}
+
+	// 默认 id
+	_, o := newTestServer(t, Table{Key: "t", Source: src, Columns: []Column{{Field: "id"}}})
+	if info, _ := o.Table("t"); info.IDField != "id" {
+		t.Fatalf("IDField 默认 = %q, want id", info.IDField)
+	}
+
+	noop := func(context.Context, ActionRequest) error { return nil }
+
+	// 显式指定；主键列用 Hidden 也算声明过
+	_, o = newTestServer(t, Table{
+		Key: "t", Source: src, IDField: "order_no",
+		Columns: []Column{{Field: "order_no", Hidden: true}, {Field: "amount"}},
+		Actions: []Action{{Key: "ok", Handler: noop}},
+	})
+	if info, _ := o.Table("t"); info.IDField != "order_no" {
+		t.Fatalf("IDField = %q, want order_no", info.IDField)
+	}
+
+	// 声明了 Actions 但主键列不在 Columns 里 → 注册就报错
+	if _, err := New(Config{Tables: []Table{{
+		Key: "t", Source: src, IDField: "order_no",
+		Columns: []Column{{Field: "amount"}},
+		Actions: []Action{{Key: "ok", Handler: noop}},
+	}}}); err == nil {
+		t.Fatal("主键列未声明时应当报错")
+	}
+
+	// 只读表（没有 Actions）不要求主键列
+	if _, err := New(Config{Tables: []Table{{
+		Key: "t", Source: src, Columns: []Column{{Field: "amount"}},
+	}}}); err != nil {
+		t.Fatalf("只读表不该要求主键列: %v", err)
+	}
+
+	// 元数据要经 /tables 下发：前端就是读 id_field 定位目标行的
+	srv, _ := newTestServer(t, Table{
+		Key: "t", Source: src, IDField: "order_no",
+		Columns: []Column{{Field: "order_no", Hidden: true}, {Field: "amount"}},
+	})
+	_, body := get(t, srv.URL+"/api/oao/tables")
+	tables, _ := body["tables"].([]any)
+	if len(tables) != 1 {
+		t.Fatalf("tables = %v", body["tables"])
+	}
+	first, _ := tables[0].(map[string]any)
+	if first["id_field"] != "order_no" {
+		t.Fatalf("tables 响应里的 id_field = %v, want order_no", first["id_field"])
+	}
+}
+
+// NewTab 与 OpPrefix 要透传到元数据。
+func TestNewTabAndOpPrefix(t *testing.T) {
+	_, o := newTestServer(t, Table{
+		Key: "t", Source: &fakeSource{},
+		Columns: []Column{
+			{Field: "url", Render: RenderLink, Href: "{url}", NewTab: true},
+			{Field: "plain", Render: RenderLink, Href: "{plain}"},
+		},
+		Filters: []Filter{{Field: "url", Op: OpPrefix}},
+	})
+	info, _ := o.Table("t")
+
+	cols := info.Columns
+	if !cols[0].NewTab || cols[1].NewTab {
+		t.Fatalf("NewTab 透传 = %v/%v, want true/false", cols[0].NewTab, cols[1].NewTab)
+	}
+	if f := info.Filters[0]; f.Op != OpPrefix || f.Widget != WidgetInput {
+		t.Fatalf("OpPrefix 筛选 = %s/%s, want prefix/input", f.Op, f.Widget)
+	}
+}

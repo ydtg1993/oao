@@ -131,6 +131,18 @@ func validate(t Table) error {
 			return fmt.Errorf("oao: table %q 筛选字段 %q 只能用字母、数字、下划线、连字符", t.Key, f.Field)
 		}
 	}
+	if len(t.Actions) > 0 {
+		// 下发时只保留声明过的列，主键列不声明的话前端拿不到它、定位不了目标行；
+		// 与其等运维点按钮时弹「这一行没有 id 字段」，不如注册时就报出来。
+		idField := orDefault(t.IDField, defaultIDField)
+		if !validKey(idField) {
+			return fmt.Errorf("oao: table %q 的 IDField %q 只能用字母、数字、下划线、连字符", t.Key, idField)
+		}
+		if !seen[idField] {
+			return fmt.Errorf("oao: table %q 声明了 Actions，但主键列 %q 不在 Columns 里（不想显示就声明成 Hidden: true）—— 否则前端拿不到它，定位不了目标行",
+				t.Key, idField)
+		}
+	}
 	if t.DefaultSort != "" {
 		// 支持多字段："-status,amount" —— 逐个剥掉前导 - 再校验
 		for _, part := range strings.Split(t.DefaultSort, ",") {

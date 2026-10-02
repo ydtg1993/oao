@@ -308,10 +308,11 @@ window.Oao = (function () {
 
     /** 执行一个操作：可选确认框 → 可选表单 → 提交 → 反馈并刷新 */
     async function runAction(meta, action, row) {
-        var id = row && row.id != null ? String(row.id) : '';
+        // 主键字段名由表声明（默认 id）；它必须是声明过的列，否则这一行里根本没有这个值
+        var idField = (meta && meta.id_field) || 'id';
+        var id = row && row[idField] != null ? String(row[idField]) : '';
         if (id === '') {
-            // 组件不知道你的主键叫什么，但没主键的操作没法定位目标行
-            Toast.show(action.label + '失败：这一行没有 id 字段，无法定位目标行', 'err', 5000);
+            Toast.show(action.label + '失败：这一行没有 ' + idField + ' 字段，无法定位目标行', 'err', 5000);
             return;
         }
         var payload = { id: id, row: row || {}, values: {} };
@@ -363,7 +364,10 @@ window.Oao = (function () {
                 var href = String(col.href || '').replace(/\{([a-z0-9_]+)\}/gi, function (_, k) {
                     return encodeURIComponent(row[k] == null ? '' : row[k]);
                 });
-                return href ? '<a class="oao-link" href="' + esc(href) + '">' + esc(v) + '</a>' : esc(v);
+                if (!href) return esc(v);
+                // 新标签页打开时补 rel，避免 target=_blank 把 opener 交给外部站点
+                var attrs = col.new_tab ? ' target="_blank" rel="noopener noreferrer"' : '';
+                return '<a class="oao-link" href="' + esc(href) + '"' + attrs + '>' + esc(v) + '</a>';
             case 'input':
                 return '<input class="oao-input" readonly value="' + esc(v) + '" style="width:'
                     + (col.max_len || 24) + 'ch">';

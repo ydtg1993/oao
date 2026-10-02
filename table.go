@@ -5,6 +5,9 @@ import (
 	"strings"
 )
 
+// defaultIDField 行主键的默认字段名（Table.IDField 留空时用它）。
+const defaultIDField = "id"
+
 // Table 一个表格页的声明 —— 纯展示，不含模型、不含库、不含查询实现。
 type Table struct {
 	Key   string // URL 与菜单标识（字母/数字/下划线/连字符）
@@ -16,6 +19,11 @@ type Table struct {
 	// Actions 声明操作列。留空 = 只读表，不注册任何写路由；
 	// 组件只把操作请求转发给 Handler，自己不碰数据。
 	Actions []Action
+
+	// IDField 行主键的字段名，默认 "id"：前端用它定位操作的目标行（ActionRequest.ID）。
+	// 表声明了 Actions 时，它必须是 Columns 里声明过的列（不显示可以用 Hidden），
+	// 否则那一行的数据根本不会下发到前端 —— oao.New 会在注册时直接报错。
+	IDField string
 
 	DefaultSort string // 默认排序，"col" 升序 / "-col" 降序；必须是已声明的列
 	PageSize    int    // 每页条数，默认 20
@@ -41,6 +49,7 @@ type Column struct {
 	Enum   map[string]string // RenderEnum：取值 -> 文案
 	Tone   map[string]string // RenderEnum：取值 -> Tone（ok/warn/err/info）
 	Href   string            // RenderLink：跳转模板，支持 {字段名} 占位
+	NewTab bool              // RenderLink：在新标签页打开（自动带上 rel="noopener noreferrer"）
 	MaxLen int               // RenderInput：只读输入框宽度（字符数）
 	Size   int               // RenderImage：缩略图边长（px），默认 64
 	Format string            // RenderTime："date" 只显示日期，留空显示到秒
@@ -66,6 +75,7 @@ type TableInfo struct {
 	Columns     []ColumnInfo `json:"columns"`
 	Filters     []FilterInfo `json:"filters"`
 	Actions     []ActionInfo `json:"actions"`
+	IDField     string       `json:"id_field"`
 	DefaultSort string       `json:"default_sort,omitempty"`
 	PageSize    int          `json:"page_size"`
 	PageSizes   []int        `json:"page_sizes"`
@@ -91,6 +101,7 @@ type ColumnInfo struct {
 	Enum     map[string]string `json:"enum,omitempty"`
 	Tone     map[string]string `json:"tone,omitempty"`
 	Href     string            `json:"href,omitempty"`
+	NewTab   bool              `json:"new_tab,omitempty"`
 	MaxLen   int               `json:"max_len,omitempty"`
 	Size     int               `json:"size,omitempty"`
 	Format   string            `json:"format,omitempty"`
@@ -111,6 +122,7 @@ type FilterInfo struct {
 func (t Table) resolve() (*TableInfo, error) {
 	info := &TableInfo{
 		Key: t.Key, Label: orDefault(t.Label, t.Key), Group: orDefault(t.Group, "General"),
+		IDField:     orDefault(t.IDField, defaultIDField),
 		DefaultSort: t.DefaultSort, PageSize: t.PageSize, PageSizes: t.PageSizes,
 		Filters: []FilterInfo{}, // 非 nil：序列化成 []，前端不用处理 null
 		Actions: []ActionInfo{},
@@ -140,7 +152,7 @@ func (t Table) resolve() (*TableInfo, error) {
 		ci := ColumnInfo{
 			Name: b.Field, Label: orDefault(b.Label, humanize(b.Field)), Kind: b.Kind,
 			Render: b.Render, Width: b.Width, Sortable: !b.NoSort, NoEdit: b.NoEdit, Hidden: b.Hidden,
-			Enum: b.Enum, Tone: b.Tone, Href: b.Href,
+			Enum: b.Enum, Tone: b.Tone, Href: b.Href, NewTab: b.NewTab,
 			MaxLen: b.MaxLen, Size: b.Size, Format: b.Format, HTML: b.HTML,
 		}
 		if ci.Render == RenderAuto {

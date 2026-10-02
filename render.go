@@ -3,6 +3,10 @@
 // 它把业务层给的数据，按声明渲染成 OA 后台的表格页 —— 只做展示协议，
 // 不碰数据层：读数据由业务实现 Source，操作请求由组件转发给业务。
 //
+// 明确一下职责边界：它不发 SQL、不认识模型、不落任何存储、不做鉴权，
+// 也不负责数据的正确性与并发/幂等 —— 同一操作被触发多次时的去重、
+// 记录的状态怎么流转，都由宿主在自己的数据层决定（见 README「组件的职责边界」）。
+//
 //	oao.New(oao.Config{
 //	    Tables: []oao.Table{{
 //	        Key: "order", Label: "订单管理",
@@ -45,7 +49,8 @@ type Op string
 
 const (
 	OpEq      Op = "eq"      // 等于
-	OpLike    Op = "like"    // 模糊
+	OpLike    Op = "like"    // 模糊（前后通配，用不上索引）
+	OpPrefix  Op = "prefix"  // 前缀匹配（只有后通配，可以走索引）
 	OpIn      Op = "in"      // 多选
 	OpBetween Op = "between" // 区间
 	OpGt      Op = "gt"      // 大于

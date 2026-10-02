@@ -67,6 +67,22 @@ go run ./cmd/demo      # http://localhost:8090
 
 组件与业务之间只有两个契约：**`Query`（进）** 和 **`ActionRequest`（进）**。
 
+### 组件的职责边界
+
+**它是展示层组件，不是数据层，也不是业务层。** 哪些事不要指望它：
+
+| 组件负责 | 组件不管（由宿主自己决定） |
+| --- | --- |
+| 把声明渲染成页面与操作列 | 鉴权与凭据：只提供 `Auth` / `headers` / `onUnauthorized` 三个挂钩，认不认、怎么认由宿主定 |
+| 把 HTTP 参数规范化成 `Query` | 审计：只回调 `OnAction`；记不记、记到哪由宿主定（组件不落任何存储） |
+| 未声明的列 / 筛选 / 动作一律挡掉 | 数据的正确性与一致性：取数、写数、事务都在宿主的数据层 |
+| 弹窗、校验、Toast、刷新等前端交互 | **并发与幂等**：同一操作被触发多次（双击、两人同时点、重试）时的去重，必须由宿主在自己的数据层做——组件不保证任何时序 |
+| 把业务错误按状态码回给前端 | 业务语义与状态维护：什么状态允许哪个动作、记录怎么流转，全由宿主定义 |
+
+最后两条尤其要说清楚：`ActionRequest.Row` 是**客户端回传的、不可信的**展示快照，组件只负责原样带过来。
+要防重复与并发覆盖，宿主必须把前置条件写进**自己的写语句**里并检查影响行数，做法见下面的
+「在 Handler 里取值」。
+
 ### Source
 
 ```go
@@ -98,7 +114,7 @@ Columns: []oao.Column{
 | `RenderAuto`（默认） | 按 `Kind` 推断 | — |
 | `RenderText` | 纯文本，过长省略号 + 悬停看全文 | — |
 | `RenderInput` | **只读**输入框：长度可控、横向滚动逐字看完（**不是编辑**） | `MaxLen` |
-| `RenderLink` | 可点击跳转 | `Href`，支持 `{字段名}` 占位 |
+| `RenderLink` | 可点击跳转 | `Href`（支持 `{字段名}` 占位）/ `NewTab`（新标签页打开） |
 | `RenderImage` | 缩略图 | `Size`（默认 64） |
 | `RenderEnum` | 取值映射成彩色标签 | `Enum` / `Tone` |
 | `RenderTime` | 时间格式化 | `Format: "date"` 只显示日期 |
@@ -132,6 +148,7 @@ Filters: []oao.Filter{
 | `OpLike` | 模糊 | 输入框 |
 | `OpIn` | 多选 | 多选 Checkbox |
 | `OpBetween` | 区间 | 日期区间 |
+| `OpPrefix` | 前缀匹配（只有后通配，能走索引） | 输入框 |
 | `OpGt` / `OpLt` | 大于 / 小于 | 输入框 |
 
 `Widget` 可显式指定：`input` / `number` / `textarea` / `select` / `switch` / `date` / `daterange`；留空按 `Op` + `Kind` 推。
@@ -278,6 +295,11 @@ Actions: []oao.Action{
 
 **表不声明 `Actions` 就是只读的**——不注册任何写路由，未声明的动作一律 404。
 
+**操作靠什么定位到那一行**：前端取行里由 `Table.IDField` 指定的字段（默认 `id`）作为主键回传，
+所以它**必须是 `Columns` 里声明过的列**——列表下发时只保留声明过的列，没声明的话前端根本拿不到这个值
+（点按钮只会弹「这一行没有 id 字段」）。不想显示这一列就用 `Hidden: true`，它仍会下发。
+`oao.New` 会在注册时校验这件事，声明不一致直接报错，不用等运维点按钮才发现。
+
 `oao.Field` 的字段：
 
 | 字段 | 说明 |
@@ -327,7 +349,7 @@ func approve(ctx context.Context, req oao.ActionRequest) error {
 | `ActionRequest` 字段 | 说明 |
 | --- | --- |
 | `Table` / `Action` | 表 key / 动作 key |
-| `ID` | 目标行主键（字符串；组件不知道你的主键叫什么） |
+| `ID` | 目标行主键（字符串；取 `Table.IDField` 指定的字段，默认 `id`） |
 | `Values` | 表单提交的字段值 |
 | `Row` | 客户端展示时那一行的原始数据（**乐观锁比对用，见下**） |
 | `Req` | 逃生舱：要读请求头/鉴权信息时用 |
@@ -425,7 +447,7 @@ o, _ := oao.New(oao.Config{
 })
 o.Mount(mux)
 
-static, _ := oao.StaticFS()                // 静态资源交给宿主挂
+static, _ := o.StaticFS()                  // 静态资源交给宿主挂（方法，不是包级函数）
 mux.Handle("/static/oao/", http.StripPrefix("/static/oao/", http.FileServer(http.FS(static))))
 ```
 
@@ -500,7 +522,7 @@ Oao.init({
 
 ### 组件 → 前端（`/tables`）
 
-`TableInfo` 含 `key` / `label` / `group` / `columns[]` / `filters[]` / `actions[]` / `default_sort` / `page_size` / `page_sizes`，
+`TableInfo` 含 `key` / `label` / `group` / `columns[]` / `filters[]` / `actions[]` / `id_field` / `default_sort` / `page_size` / `page_sizes`，
 所有留空项在注册时已补成具体值——前端拿到的永远是可直接用的形态。
 
 ---
