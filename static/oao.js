@@ -345,6 +345,14 @@ window.Oao = (function () {
         });
     }
 
+    /**
+     * 正在执行中的动作，key 为 `表/动作/主键` → true。见 runAction 开头的防连点。
+     * 用「表 + 动作 + 主键」而不是「按钮」当键：同一个动作可能有多个入口
+     * （行内平铺按钮、「更多 ▾」面板里的项、以及宿主将来自己调 runAction），
+     * 按按钮去重只挡得住其中一个。
+     */
+    var inFlightActions = {};
+
     /** 执行一个操作：可选确认框 → 可选表单 → 提交 → 反馈并刷新 */
     async function runAction(meta, action, row) {
         // 主键字段名由表声明（默认 id）；它必须是声明过的列，否则这一行里根本没有这个值
@@ -356,25 +364,37 @@ window.Oao = (function () {
         }
         var payload = { id: id, row: row || {}, values: {} };
 
-        if (action.confirm) {
-            var ok = await Dialog.confirm({
-                title: action.label, body: '<p>' + esc(action.confirm) + '</p>',
-                danger: action.tone === 'err', okLabel: action.label
-            });
-            if (!ok) return;
-        }
-        if (action.form && action.form.length) {
-            var values = await openForm(action.label, action.form, row);
-            if (values === null) return;
-            payload.values = values;
-        }
-
+        // 防连点：同一「表 + 动作 + 主键」在上一次请求结束前再次触发，直接忽略。
+        // 覆盖的不只是手快双击 —— 确认框/表单还开着时的第二次点击、以及宿主直接调
+        // runAction 的路径，都在这里被挡住。服务端的条件更新仍是最终防线，
+        // 这一层的意义是不让多余请求发出去、也不让操作人看到一句莫名其妙的失败提示。
+        var flightKey = (meta.key || '') + '/' + action.key + '/' + id;
+        if (inFlightActions[flightKey]) return;
+        inFlightActions[flightKey] = true;
         try {
-            await postAction(meta.key, action.key, payload);
-            Toast.show(action.label + '成功', 'ok');
-            await load(meta.key);
-        } catch (e) {
-            Toast.show(action.label + '失败：' + e.message, 'err', 5000);
+            if (action.confirm) {
+                var ok = await Dialog.confirm({
+                    title: action.label, body: '<p>' + esc(action.confirm) + '</p>',
+                    danger: action.tone === 'err', okLabel: action.label
+                });
+                if (!ok) return;
+            }
+            if (action.form && action.form.length) {
+                var values = await openForm(action.label, action.form, row);
+                if (values === null) return;
+                payload.values = values;
+            }
+
+            try {
+                await postAction(meta.key, action.key, payload);
+                Toast.show(action.label + '成功', 'ok');
+                await load(meta.key);
+            } catch (e) {
+                Toast.show(action.label + '失败：' + e.message, 'err', 5000);
+            }
+        } finally {
+            // 确认框取消、表单取消、请求成功或失败 —— 都从这里放行下一次
+            delete inFlightActions[flightKey];
         }
     }
 
