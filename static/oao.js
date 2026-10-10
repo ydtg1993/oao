@@ -794,6 +794,15 @@ window.Oao = (function () {
     }
 
     /* ---------- 状态与取数 ---------- */
+    /**
+     * seedQuery 把**预置筛选**塞进某张表的查询状态：`{列名: 值}`，整体替换而不是合并
+     * （宿主给的就是这次要看的那一组条件；合并的话上一轮的条件会悄悄留在下一次里）。
+     * 见对外 API 的 `render` / `open`。
+     */
+    function seedQuery(st, opts) {
+        if (opts && opts.filter) st.query.filter = Object.assign({}, opts.filter);
+    }
+
     function stateOf(key) {
         if (!state[key]) {
             state[key] = { key: key, seq: 0, meta: null, rows: [], query: { page: 1, size: 0, search: '', sort: '', filter: {} }, el: null };
@@ -1034,7 +1043,7 @@ window.Oao = (function () {
 
         if (opts.sidebarFooter) fillSlot(sideFoot, opts.sidebarFooter, apiObj);
         if (opts.headerRight) fillSlot(topRight, opts.headerRight, apiObj);
-        async function select(key) {
+        async function select(key, opts) {
             var item = menu.byKey[key];
             if (!item) return;
             // 内容区只有一个：把其它表的在途请求作废，避免慢响应回来盖住新表
@@ -1052,6 +1061,7 @@ window.Oao = (function () {
                 var st = stateOf(item.table);
                 st.el = content;
                 st.query.page = 1;
+                seedQuery(st, opts);
                 await load(item.table);
             } else {
                 // 宿主页面单独包一层：它自己滚，不挤占表格页的布局
@@ -1065,7 +1075,8 @@ window.Oao = (function () {
                 }
             }
         }
-        apiObj.open = function (key) { select(key); };
+        /** open(key, opts)：切到某张表/某个宿主页面；opts.filter 是预置筛选（见 render） */
+        apiObj.open = function (key, opts) { return select(key, opts); };
 
         el.querySelectorAll('.oao-nav-item').forEach(function (b) {
             b.onclick = function () { select(b.getAttribute('data-oao-key')); };
@@ -1123,11 +1134,19 @@ window.Oao = (function () {
         mount: mount,
         /** 表格清单（渲染菜单用）；force=true 时强制重取 */
         list: loadTables,
-        /** 把某张表渲染进容器（不带外壳） */
-        render: async function (container, key) {
+        /**
+         * 把某张表渲染进容器（不带外壳）。
+         *
+         * opts.filter 是**预置筛选**：`{列名: 值}`，等价于用户一进来就在筛选栏里填好了这些条件 ——
+         * 筛选栏会把它显示出来，也能改、能清（是"填好"而不是"锁上"）。宿主用它做"带着上下文打开
+         * 某张表"，比如后台按站点 Tab 打开任务表：`Oao.render(el, 'task', { filter: { site: 'huangguo' } })`。
+         * 不传 = 保持上一次的条件（与以前一样）。
+         */
+        render: async function (container, key, opts) {
             var st = stateOf(key);
             st.el = container;
             st.query.page = 1;
+            seedQuery(st, opts);
             await load(key);
         },
         /** 重新加载某张表（外部操作后刷新用） */

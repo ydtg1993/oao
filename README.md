@@ -44,6 +44,8 @@ o.Mount(mux)   // 路由：GET /api/oao/tables、GET /api/oao/{table}、POST /ap
 ```js
 Oao.init({ base: '/api/oao' });
 Oao.render(document.getElementById('app'), 'order');   // 只画表格
+// 也可以带着**预置筛选**打开（第三个参数，见「怎么筛」）：
+// Oao.render(document.getElementById('app'), 'order', { filter: { status: '2' } });
 // 或者
 Oao.mount(document.getElementById('app'), { ... });     // 连外壳一起搭，见「布局」
 ```
@@ -156,6 +158,23 @@ Filters: []oao.Filter{
 
 **未声明的字段不可筛**——筛选白名单在组件这一层就把住了（未声明的 `filter[...]` 根本不会进 `Query.Filter`），业务不用自己防注入。
 **不声明 `Filters` 就不显示筛选栏**（全局搜索与排序仍在）。
+
+### 宿主预置筛选（`opts.filter`）
+
+想"带着上下文打开某张表"（比如后台按站点 Tab 打开任务表，只看这一个站的任务），
+给 `render` / `open` 传第三个参数：
+
+```js
+Oao.render(document.getElementById('app'), 'task', { filter: { site: 'huangguo' } });   // 自己画
+api.open('task', { filter: { site: 'huangguo' } });                                    // 用 mount 的外壳
+```
+
+- 它就是**筛选项**，不是锁：筛选栏里会把这些条件**填好显示出来**，用户照样能改能清。
+- **整体替换**而不是合并：给的就是这次要看的那一组条件 —— 不传则保持上一次的（与老行为一致）。
+  要从"看某站"切回"看全部"，传 `{ filter: {} }`。
+- 列名必须在该表的 `Filters` 里声明过，否则服务端不会放行（白名单在组件与服务端两层）。
+- 空值表达不了"某列等于空"（`filter[site]=` 这种空值会被跳过）：需要筛"未归属"那档就另想别的表达
+  （比如加一个显式的标记列）。
 **多个筛选条件可以同时生效**，前端把所有筛选控件的值一起发过来。
 
 ### 在 Source 里取值
@@ -333,11 +352,12 @@ Actions: []oao.Action{
 浏览器重放、以及绕过前端直接打接口，组件都拦不住。做法见下节的 `oao.Fail` +
 条件更新（把版本条件写进 `WHERE`，而不是"先查再写"）。
 
-这条行为有测试：`testdata/oao_guard_test.js` 用一块最小假 DOM 驱动真实的 `static/oao.js`，
-断言"连点 3 次只发 1 个请求、且上一轮结束后放行下一次"。零依赖，`node` 直接跑：
+这两条行为都有测试：`testdata/` 下的脚本用一块最小假 DOM（共用的假件在 `testdata/fake_dom.js`）
+驱动真实的 `static/oao.js`。零依赖，`node` 直接跑：
 
 ```bash
-node testdata/oao_guard_test.js static/oao.js
+node testdata/oao_guard_test.js  static/oao.js   # 连点 3 次只发 1 个请求、上一轮结束后放行下一次
+node testdata/oao_render_test.js static/oao.js   # 预置筛选进了请求与筛选栏，且不带 opts 重渲染时保持
 ```
 
 （放在 `testdata/` 是因为 `oao.go` 是 `//go:embed static` —— 测试文件放进 `static/`

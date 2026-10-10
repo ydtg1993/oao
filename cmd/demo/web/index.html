@@ -46,9 +46,15 @@
                 render: function (el, api) {
                     el.innerHTML = '<div class="card"><h2>这是宿主自己的页面</h2>'
                         + '<p>由 <code>pages[].render(el, api)</code> 渲染，跟 oao 表格共用同一套外壳。</p>'
-                        + '<p>api 提供 <code>open(key)</code> / <code>reload()</code> / <code>current()</code>。</p>'
-                        + '<button class="oao-btn" id="go">跳到「订单管理」</button></div>';
+                        + '<p>api 提供 <code>open(key, opts)</code> / <code>reload()</code> / <code>current()</code>。</p>'
+                        + '<button class="oao-btn" id="go">跳到「订单管理」</button>'
+                        + '<button class="oao-btn" id="filtered" style="margin-left:8px">带预置筛选打开（只看「通过」）</button></div>';
                     el.querySelector('#go').onclick = function () { api.open('order'); };
+                    // 预置筛选：open/render 的 opts.filter —— 打开时筛选栏里就填好了「状态=通过」，
+                    // 用户能改能清（是"帮你填好"，不是"锁上"）。
+                    el.querySelector('#filtered').onclick = function () {
+                        api.open('order', { filter: { status: '2' } });
+                    };
                 }
             },
         ],
