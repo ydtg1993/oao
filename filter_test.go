@@ -320,3 +320,52 @@ func TestDateRangeIncomplete(t *testing.T) {
 		}
 	}
 }
+
+// 解码失败要返回零值 + false，不能猜一个值给 Source 拼进 SQL。
+func TestFilterValueDecodeFailures(t *testing.T) {
+	if n, ok := (FilterValue{raw: "abc"}).Int(); ok || n != 0 {
+		t.Fatalf("非数字 Int = %d %v, want 0 false", n, ok)
+	}
+	if f, ok := (FilterValue{raw: "abc"}).Float(); ok || f != 0 {
+		t.Fatalf("非数字 Float = %v %v, want 0 false", f, ok)
+	}
+
+	// Bool 认 1/0、true/false、yes/no（大小写不敏感、两侧空白无关）
+	for raw, want := range map[string]bool{
+		"1": true, "TRUE": true, " yes ": true,
+		"0": false, "False": false, "NO": false,
+	} {
+		got, ok := (FilterValue{raw: raw}).Bool()
+		if !ok || got != want {
+			t.Fatalf("Bool(%q) = %v %v, want %v true", raw, got, ok, want)
+		}
+	}
+	if _, ok := (FilterValue{raw: "maybe"}).Bool(); ok {
+		t.Fatal("认不出的布尔值应返回 false,false")
+	}
+}
+
+// 区间不完整（缺端点）或端点解不成时间时，TimeRange / DateRange 都要 ok=false ——
+// 宿主据此跳过这个条件，而不是拿零值当条件拼进 SQL。
+func TestRangeHelpersFailSoft(t *testing.T) {
+	for _, raw := range []string{"", "abc", "2026-01-01", "..2026-01-31", "2026-01-01..", " .. "} {
+		v := FilterValue{raw: raw}
+		if _, _, ok := v.TimeRange(); ok {
+			t.Fatalf("TimeRange(%q) 应当失败", raw)
+		}
+		if _, _, ok := v.DateRange(); ok {
+			t.Fatalf("DateRange(%q) 应当失败", raw)
+		}
+	}
+
+	// 区间形状对、端点非法：同样失败
+	for _, raw := range []string{"abc..def", "2026-01-01..abc"} {
+		v := FilterValue{raw: raw}
+		if _, _, ok := v.TimeRange(); ok {
+			t.Fatalf("TimeRange(%q) 应当失败", raw)
+		}
+		if _, _, ok := v.DateRange(); ok {
+			t.Fatalf("DateRange(%q) 应当失败", raw)
+		}
+	}
+}

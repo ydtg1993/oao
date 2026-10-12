@@ -437,3 +437,160 @@ func TestOnActionEventCarriesRequestContext(t *testing.T) {
 		t.Fatalf("从 ev.Req 的上下文里读到 %q, want 张三", got)
 	}
 }
+
+// ActionError.Error() 是错误链上唯一给日志和排查看的信息，之前没人调过（覆盖 0%）。
+func TestActionErrorError(t *testing.T) {
+	err := Fail(http.StatusConflict, "该行已被%s修改", "他人")
+	if err.Error() != "该行已被他人修改" {
+		t.Fatalf("Error() = %q", err.Error())
+	}
+	var ae *ActionError
+	if !errors.As(err, &ae) || ae.Status != http.StatusConflict {
+		t.Fatalf("Fail 出来的错误 = %+v", ae)
+	}
+	if got := (&ActionError{Message: "手写的"}).Error(); got != "手写的" {
+		t.Fatalf("Error() = %q, want 手写的", got)
+	}
+}
+
+// 取值器要吃得下前端可能给的每种类型（JSON 数字是 float64，字符串表单给 string），
+// 类型不认识时返回零值，别猜。
+func TestActionRequestTypeBranches(t *testing.T) {
+	req := ActionRequest{
+		Values: map[string]any{
+			"int": int(7), "num": float64(9), "str": "11",
+			"bad": "abc", "yes": "yes", "no": "0",
+			"flag": true, "zero": float64(0), "obj": struct{}{},
+		},
+		Row: map[string]any{"num": float64(3.5), "obj": struct{}{}},
+	}
+
+	if n, ok := req.Int("int"); !ok || n != 7 {
+		t.Fatalf("Int(int) = %d %v", n, ok)
+	}
+	if n, ok := req.Int("str"); !ok || n != 11 {
+		t.Fatalf("Int(string) = %d %v", n, ok)
+	}
+	if n, ok := req.Int("bad"); ok || n != 0 {
+		t.Fatalf("Int(非数字) = %d %v", n, ok)
+	}
+	if n, ok := req.Int("obj"); ok || n != 0 {
+		t.Fatalf("Int(不支持的类型) = %d %v", n, ok)
+	}
+
+	if f, ok := req.Float("int"); !ok || f != 7 {
+		t.Fatalf("Float(int) = %v %v", f, ok)
+	}
+	if f, ok := req.Float("num"); !ok || f != 9 {
+		t.Fatalf("Float(float64) = %v %v", f, ok)
+	}
+	if f, ok := req.Float("bad"); ok || f != 0 {
+		t.Fatalf("Float(非数字) = %v %v", f, ok)
+	}
+	if f, ok := req.Float("obj"); ok || f != 0 {
+		t.Fatalf("Float(不支持的类型) = %v %v", f, ok)
+	}
+
+	if !req.Bool("flag") {
+		t.Fatal("Bool(bool true) = false")
+	}
+	if req.Bool("zero") {
+		t.Fatal("Bool(float64 0) 应为 false")
+	}
+	if !req.Bool("num") {
+		t.Fatal("Bool(float64 9) 应为 true")
+	}
+	if !req.Bool("yes") || req.Bool("no") {
+		t.Fatal("Bool 字符串 yes/no 解析错了")
+	}
+	if req.Bool("obj") {
+		t.Fatal("Bool(不支持的类型) 应为 false")
+	}
+
+	if got := req.RowString("num"); got != "3.5" {
+		t.Fatalf("RowString(float64) = %q", got)
+	}
+	if got := req.RowString("obj"); got != "" {
+		t.Fatalf("RowString(不支持的类型) = %q, want 空串", got)
+	}
+	if got := req.RowString("missing"); got != "" {
+		t.Fatalf("RowString(缺字段) = %q, want 空串", got)
+	}
+}
+
+// Key 与表单项 Name 都会进路由 / data-field 属性，非法字符要在注册时就拦住。
+func TestActionValidationEdges(t *testing.T) {
+	noop := func(context.Context, ActionRequest) error { return nil }
+	cases := []struct {
+		name string
+		act  Action
+		want string // 报错要点名是谁非法，否则排查时只知道"注册失败"
+	}{
+		{"Key 带斜杠", Action{Key: "a/b", Handler: noop}, "操作 key"},
+		{"Key 带空格", Action{Key: "a b", Handler: noop}, "操作 key"},
+		{"表单项 Name 带空格", Action{Key: "ok", Handler: noop, Form: []Field{{Name: "a b"}}}, "表单项"},
+		{"表单项 Name 带斜杠", Action{Key: "ok", Handler: noop, Form: []Field{{Name: "a/b"}}}, "表单项"},
+	}
+	for _, c := range cases {
+		_, err := New(Config{Tables: []Table{{
+			Key: "t", Source: &fakeSource{}, Columns: []Column{{Field: "id"}}, Actions: []Action{c.act},
+		}}})
+		if err == nil {
+			t.Fatalf("%s：应当报错", c.name)
+		}
+		if !strings.Contains(err.Error(), c.want) {
+			t.Fatalf("%s：报错没点名 %q：%v", c.name, c.want, err)
+		}
+	}
+}
+
+// 显式声明的表单字段要补齐默认值：Kind 缺省为 string、控件按 Kind/Options 推断、
+// 多行框不填行数给 3 行、Label 缺省从字段名转出来。
+func TestActionFormFieldDefaults(t *testing.T) {
+	_, o := actionServerWith(t, Table{
+		Key: "order", Source: &fakeSource{}, Columns: []Column{{Field: "id"}},
+		Actions: []Action{{
+			Key: "edit", Handler: func(context.Context, ActionRequest) error { return nil },
+			Form: []Field{
+				{Name: "remark"},                                       // 全默认
+				{Name: "amount", Kind: KindNumber},                     // 数字输入
+				{Name: "notify", Kind: KindBool},                       // 开关
+				{Name: "due_at", Kind: KindTime},                       // 日期
+				{Name: "payload", Kind: KindJSON},                      // 多行
+				{Name: "note", Widget: WidgetTextarea},                 // 显式多行，行数该补 3
+				{Name: "note2", Widget: WidgetTextarea, Rows: 5},       // 指定了行数就照用
+				{Name: "stage", Options: map[string]string{"1": "待审"}}, // 有选项 → 下拉
+				{Name: "created_at", Widget: WidgetTextarea},           // humanize 的标签
+			},
+		}},
+	}, nil)
+
+	info, _ := o.Table("order")
+	form := info.Actions[0].Form
+	want := []struct {
+		name   string
+		label  string
+		kind   Kind
+		widget Widget
+		rows   int
+	}{
+		{"remark", "Remark", KindString, WidgetInput, 0},
+		{"amount", "Amount", KindNumber, WidgetNumber, 0},
+		{"notify", "Notify", KindBool, WidgetSwitch, 0},
+		{"due_at", "Due At", KindTime, WidgetDate, 0},
+		{"payload", "Payload", KindJSON, WidgetTextarea, 3},
+		{"note", "Note", KindString, WidgetTextarea, 3},
+		{"note2", "Note2", KindString, WidgetTextarea, 5},
+		{"stage", "Stage", KindString, WidgetSelect, 0},
+		{"created_at", "Created At", KindString, WidgetTextarea, 3},
+	}
+	if len(form) != len(want) {
+		t.Fatalf("form 字段数 = %d, want %d", len(form), len(want))
+	}
+	for i, w := range want {
+		got := form[i]
+		if got.Name != w.name || got.Label != w.label || got.Kind != w.kind || got.Widget != w.widget || got.Rows != w.rows {
+			t.Fatalf("form[%d] = %+v, want %v/%s/%s/%s/rows=%d", i, got, w.name, w.label, w.kind, w.widget, w.rows)
+		}
+	}
+}

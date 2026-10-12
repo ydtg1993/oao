@@ -589,3 +589,55 @@ func TestNewTabAndOpPrefix(t *testing.T) {
 		t.Fatalf("OpPrefix 筛选 = %s/%s, want prefix/input", f.Op, f.Widget)
 	}
 }
+
+// Prefix 是宿主拼跳转地址、挂路由用的，默认 /api/oao，可配。
+func TestPrefixDefaultAndCustom(t *testing.T) {
+	src := &fakeSource{}
+	col := []Column{{Field: "a"}}
+
+	_, o := newTestServer(t, Table{Key: "t", Source: src, Columns: col})
+	if got := o.Prefix(); got != "/api/oao" {
+		t.Fatalf("默认 Prefix = %q", got)
+	}
+
+	o2, err := New(Config{Prefix: "/admin/tables", Tables: []Table{{Key: "t", Source: src, Columns: col}}})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	if got := o2.Prefix(); got != "/admin/tables" {
+		t.Fatalf("自定义 Prefix = %q", got)
+	}
+}
+
+// Table(key) 未命中返回 (nil,false)：Host 据此回退到默认页，不能拿到半截元数据。
+func TestTableMissReturnsFalse(t *testing.T) {
+	_, o := newTestServer(t, Table{Key: "t", Source: &fakeSource{}, Columns: []Column{{Field: "a"}}})
+	if info, ok := o.Table("nope"); ok || info != nil {
+		t.Fatalf("Table(未注册) = %+v %v, want nil false", info, ok)
+	}
+}
+
+// IDField 会进 querySelector，声明了 Actions 时它也要过 validKey。
+// 列名本身合法，唯独 IDField 非法 —— 确保拦它的就是 IDField 那道检查。
+func TestIDFieldMustBeURLSafe(t *testing.T) {
+	_, err := New(Config{Tables: []Table{{
+		Key: "t", Source: &fakeSource{}, IDField: "a/b",
+		Columns: []Column{{Field: "id"}},
+		Actions: []Action{{Key: "ok", Handler: func(context.Context, ActionRequest) error { return nil }}},
+	}}})
+	if err == nil {
+		t.Fatal("IDField 含斜杠时应当报错")
+	}
+	if !strings.Contains(err.Error(), "IDField") {
+		t.Fatalf("报错没点名 IDField：%v", err)
+	}
+}
+
+// DefaultSort 里的空段（"id,, "）要跳过，不能被当成未声明的列。
+func TestDefaultSortSkipsEmptySegment(t *testing.T) {
+	if _, err := New(Config{Tables: []Table{{
+		Key: "t", Source: &fakeSource{}, Columns: []Column{{Field: "id"}}, DefaultSort: "id,, ",
+	}}}); err != nil {
+		t.Fatalf("空段不该被当成未声明的列：%v", err)
+	}
+}
