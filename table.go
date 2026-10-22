@@ -83,6 +83,8 @@ type TableInfo struct {
 
 	source       Source
 	actionByName map[string]ActionHandler
+	// actionStates 按行计算动作状态（文案/禁用/隐藏）；只有声明了 StateFunc 的动作在这里。
+	actionStates map[string]ActionStateFunc
 	// actionFields 每个动作允许接收的表单字段，用来挡住客户端多塞的字段。
 	actionFields map[string]map[string]bool
 	filterSpecs  map[string]FilterSpec // 字段名 -> 筛选规格，交给 Query 解码用
@@ -205,12 +207,18 @@ func (t Table) resolve() (*TableInfo, error) {
 		}
 	}
 
-	infos, handlers, err := resolveActions(t.Key, t.Actions, info.Columns)
+	infos, handlers, states, err := resolveActions(t.Key, t.Actions, info.Columns)
 	if err != nil {
 		return nil, err
 	}
 	info.Actions = infos
 	info.actionByName = make(map[string]ActionHandler, len(handlers))
+	info.actionStates = make(map[string]ActionStateFunc, len(handlers))
+	for i, a := range infos {
+		if states[i] != nil {
+			info.actionStates[a.Key] = states[i]
+		}
+	}
 	info.actionFields = make(map[string]map[string]bool, len(infos))
 	for i, a := range infos {
 		info.actionByName[a.Key] = handlers[i]

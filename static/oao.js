@@ -274,13 +274,30 @@ window.Oao = (function () {
     // 超过这个数量的动作会收进「更多」，否则行内会被按钮淹掉
     var MAX_FLAT_ACTIONS = 3;
 
-    function actionButton(a, rowIdx) {
-        return '<button class="oao-btn oao-btn-sm ' + esc(a.tone || '') + '" data-action="' + esc(a.key)
-            + '" data-row="' + rowIdx + '">' + esc(a.label) + '</button>';
+    function actionState(row, action) {
+        var states = row && row.__oao_actions;
+        return (states && states[action.key]) || {};
     }
 
-    function actionColumn(meta, rowIdx) {
-        var acts = meta.actions || [];
+    function actionLabel(action, state) {
+        return state.label || action.label;
+    }
+
+    /** 本行实际要渲染的动作：过滤掉 StateFunc 返回 hidden 的项。 */
+    function visibleActions(meta, row) {
+        return (meta.actions || []).filter(function (a) {
+            return !actionState(row, a).hidden;
+        });
+    }
+
+    function actionButton(a, state, rowIdx) {
+        var disabled = state.disabled ? ' disabled aria-disabled="true"' : '';
+        return '<button class="oao-btn oao-btn-sm ' + esc(a.tone || '') + '" data-action="' + esc(a.key)
+            + '" data-row="' + rowIdx + '"' + disabled + '>' + esc(actionLabel(a, state)) + '</button>';
+    }
+
+    function actionColumn(meta, row, rowIdx) {
+        var acts = visibleActions(meta, row);
         var head = '';
         if (acts.length > MAX_FLAT_ACTIONS) {
             // 前两个平铺，其余进「更多」——常用的还在手边，少用的不占地方
@@ -288,13 +305,14 @@ window.Oao = (function () {
             acts = acts.slice(0, 2);
         }
         return '<div class="oao-actions">'
-            + acts.map(function (a) { return actionButton(a, rowIdx); }).join('')
+            + acts.map(function (a) { return actionButton(a, actionState(row, a), rowIdx); }).join('')
             + head + '</div>';
     }
 
     /** 「更多」面板：列出被收起的动作，点一项走同一个 runAction */
     function openActionMenu(trigger, st, rowIdx) {
-        var more = (st.meta.actions || []).slice(2);
+        var row = st.rows[rowIdx] || {};
+        var more = visibleActions(st.meta, row).slice(2);
         Popup.open({
             trigger: trigger,
             itemSel: '.oao-select-item',
@@ -304,7 +322,7 @@ window.Oao = (function () {
                 panel.innerHTML = more.map(function (a, i) {
                     return '<div class="oao-select-item' + (i === hl ? ' hl' : '') + '" role="menuitem" data-i="' + i + '">'
                         + '<span class="dot ' + esc(a.tone || '') + '"></span>'
-                        + '<span>' + esc(a.label) + '</span></div>';
+                        + '<span>' + esc(actionLabel(a, actionState(row, a))) + '</span></div>';
                 }).join('');
             },
             onPick: function (i) {
@@ -355,11 +373,14 @@ window.Oao = (function () {
 
     /** 执行一个操作：可选确认框 → 可选表单 → 提交 → 反馈并刷新 */
     async function runAction(meta, action, row) {
+        var state = actionState(row, action);
+        if (state.disabled) return;
+        var label = actionLabel(action, state);
         // 主键字段名由表声明（默认 id）；它必须是声明过的列，否则这一行里根本没有这个值
         var idField = (meta && meta.id_field) || 'id';
         var id = row && row[idField] != null ? String(row[idField]) : '';
         if (id === '') {
-            Toast.show(action.label + '失败：这一行没有 ' + idField + ' 字段，无法定位目标行', 'err', 5000);
+            Toast.show(label + '失败：这一行没有 ' + idField + ' 字段，无法定位目标行', 'err', 5000);
             return;
         }
         var payload = { id: id, row: row || {}, values: {} };
@@ -374,23 +395,23 @@ window.Oao = (function () {
         try {
             if (action.confirm) {
                 var ok = await Dialog.confirm({
-                    title: action.label, body: '<p>' + esc(action.confirm) + '</p>',
-                    danger: action.tone === 'err', okLabel: action.label
+                    title: label, body: '<p>' + esc(action.confirm) + '</p>',
+                    danger: action.tone === 'err', okLabel: label
                 });
                 if (!ok) return;
             }
             if (action.form && action.form.length) {
-                var values = await openForm(action.label, action.form, row);
+                var values = await openForm(label, action.form, row);
                 if (values === null) return;
                 payload.values = values;
             }
 
             try {
                 await postAction(meta.key, action.key, payload);
-                Toast.show(action.label + '成功', 'ok');
+                Toast.show(label + '成功', 'ok');
                 await load(meta.key);
             } catch (e) {
-                Toast.show(action.label + '失败：' + e.message, 'err', 5000);
+                Toast.show(label + '失败：' + e.message, 'err', 5000);
             }
         } finally {
             // 确认框取消、表单取消、请求成功或失败 —— 都从这里放行下一次
@@ -774,7 +795,7 @@ window.Oao = (function () {
         }).join('') + (hasActions ? '<th scope="col">操作</th>' : '');
         var body = rows.map(function (r, i) {
             return '<tr>' + cols.map(function (c) { return '<td>' + cell(c, r) + '</td>'; }).join('')
-                + (hasActions ? '<td>' + actionColumn(meta, i) + '</td>' : '') + '</tr>';
+                + (hasActions ? '<td>' + actionColumn(meta, r, i) + '</td>' : '') + '</tr>';
         }).join('');
         // tabindex/role/aria-label：溢出时键盘也能滚到内容（组件库 Table 规格的建议）
         return '<div class="table-wrap" tabindex="0" role="region" aria-label="'

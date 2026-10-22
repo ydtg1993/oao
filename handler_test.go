@@ -95,6 +95,69 @@ func TestLoggerRecordsOnActionPanic(t *testing.T) {
 	}
 }
 
+// 动作的 StateFunc 按行计算文案/禁用/隐藏，组件把它们挂到每行的 __oao_actions 下。
+func TestListAttachesRowActionStates(t *testing.T) {
+	src := &fakeSource{rows: []map[string]any{
+		{"id": 1, "status": "a"},
+		{"id": 2, "status": "b"},
+	}}
+	srv, _ := newTestServer(t, Table{
+		Key: "t", Source: src,
+		Columns: []Column{{Field: "id", Kind: KindNumber}, {Field: "status"}},
+		Actions: []Action{{
+			Key: "go", Label: "走",
+			Handler: func(context.Context, ActionRequest) error { return nil },
+			StateFunc: func(row map[string]any) ActionState {
+				if row["status"] == "a" {
+					return ActionState{Label: "甲", Disabled: true}
+				}
+				return ActionState{Hidden: true}
+			},
+		}},
+	})
+
+	code, body := get(t, srv.URL+"/api/oao/t")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+	rows, ok := body["rows"].([]any)
+	if !ok || len(rows) != 2 {
+		t.Fatalf("rows = %#v", body["rows"])
+	}
+	first := rows[0].(map[string]any)
+	states, ok := first["__oao_actions"].(map[string]any)
+	if !ok {
+		t.Fatalf("first row actions = %#v", first["__oao_actions"])
+	}
+	state, ok := states["go"].(map[string]any)
+	if !ok || state["label"] != "甲" || state["disabled"] != true {
+		t.Fatalf("first go state = %#v", states["go"])
+	}
+	second := rows[1].(map[string]any)
+	secondStates, ok := second["__oao_actions"].(map[string]any)
+	if !ok || secondStates["go"].(map[string]any)["hidden"] != true {
+		t.Fatalf("second row should hide the action: %#v", second["__oao_actions"])
+	}
+}
+
+// StateFunc 返回零值时回退表级默认，不给行挂多余字段。
+func TestListOmitsDefaultRowActionStates(t *testing.T) {
+	src := &fakeSource{rows: []map[string]any{{"id": 1}}}
+	srv, _ := newTestServer(t, Table{
+		Key: "t", Source: src, Columns: []Column{{Field: "id", Kind: KindNumber}},
+		Actions: []Action{{
+			Key: "go", Label: "走",
+			Handler:   func(context.Context, ActionRequest) error { return nil },
+			StateFunc: func(map[string]any) ActionState { return ActionState{} },
+		}},
+	})
+	_, body := get(t, srv.URL+"/api/oao/t")
+	row := body["rows"].([]any)[0].(map[string]any)
+	if _, exists := row["__oao_actions"]; exists {
+		t.Fatalf("default state should be omitted: %#v", row["__oao_actions"])
+	}
+}
+
 // /tables 是给侧边栏菜单读的，只认 GET。
 func TestTablesEndpointRejectsNonGET(t *testing.T) {
 	o, err := New(Config{Tables: []Table{{Key: "t", Source: &fakeSource{}, Columns: []Column{{Field: "a"}}}}})

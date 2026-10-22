@@ -312,8 +312,37 @@ Actions: []oao.Action{
 | `Form` | 非空：点完先弹表单 |
 | `DeriveForm` | `true` 时忽略 `Form`，由列声明推导（`EditAction` 用的就是它） |
 | `Handler` | 必填，业务处理逻辑 |
+| `StateFunc` | 可选，按行计算 `{Label, Disabled, Hidden}`；nil = 表级默认 |
 
-**动作超过 3 个会自动收起**：前两个平铺，其余进「更多 ▾」的下拉面板（面板复用筛选下拉那一套：点外部/Esc 关、↑↓ 选、Enter 确认）——行内不会被一堆按钮淹掉。
+**按行改动作（`StateFunc`）**：同一个表级动作可以在不同行显示不同文案 / 禁用 / 隐藏：
+
+```go
+{
+    Key: "push", Label: "推送 / 更新",
+    StateFunc: func(row map[string]any) oao.ActionState {
+        switch row["push_state"] {
+        case "0":
+            return oao.ActionState{Label: "未开始", Disabled: true}
+        case "1":
+            return oao.ActionState{Hidden: true} // 这一行改由「预处理」动作接手
+        case "3":
+            return oao.ActionState{Label: "推送"}
+        case "4":
+            return oao.ActionState{Label: "重推送"}
+        case "6":
+            return oao.ActionState{Hidden: true}
+        }
+        return oao.ActionState{}
+    },
+    Handler: push,
+},
+```
+
+组件在列表响应的每行里加一个保留字段 `__oao_actions`（按动作 key 索引），前端按行渲染；返回零值表示用表级默认。
+隐藏动作不参与 `MAX_FLAT_ACTIONS` 计数。`StateFunc` 的 `row` 是已按列声明裁剪过的只读行数据，所以用于判断的字段要声明成列（不想显示用 `Hidden: true`）。
+业务行不要声明 `__oao_actions` 同名列。
+
+**动作超过 3 个会自动收起**：前两个平铺，其余进「更多 ▾」的下拉面板（面板复用筛选下拉那一套：点外部/Esc 关、↑↓ 选、Enter 确认）——行内不会被一堆按钮淹掉。隐藏动作会在计数前先过滤。
 
 **表不声明 `Actions` 就是只读的**——不注册任何写路由，未声明的动作一律 404。
 

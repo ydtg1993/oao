@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -511,6 +512,25 @@ func TestStaticFSContainsAssets(t *testing.T) {
 		f.Close()
 		if statErr != nil || st.Size() == 0 {
 			t.Fatalf("%s 是空的（size=%v err=%v）", name, st, statErr)
+		}
+	}
+}
+
+// 前端要真的读 __oao_actions：服务端算出了行状态，JS 没接的话等于没做。
+func TestStaticJSHandlesRowActionStates(t *testing.T) {
+	_, o := newTestServer(t, Table{Key: "t", Source: &fakeSource{},
+		Columns: []Column{{Field: "a"}}})
+	fsys, err := o.StaticFS()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := fs.ReadFile(fsys, "oao.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, token := range []string{"__oao_actions", "actionState(", "visibleActions(", "aria-disabled"} {
+		if !strings.Contains(string(data), token) {
+			t.Fatalf("oao.js 缺少行级动作支持：%q", token)
 		}
 	}
 }

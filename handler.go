@@ -153,6 +153,7 @@ func (o *Oao) handleList(w http.ResponseWriter, r *http.Request) {
 		rows = []map[string]any{}
 	}
 	rows = trimRows(rows, table.Columns)
+	applyRowActionStates(rows, table.actionStates)
 
 	writeJSON(w, map[string]any{
 		"total":   total,
@@ -184,6 +185,34 @@ func trimRows(rows []map[string]any, cols []ColumnInfo) []map[string]any {
 		out = append(out, trimmed)
 	}
 	return out
+}
+
+// rowActionsField 是列表响应里每行动作状态的保留字段。
+// 业务行不要声明同名列；它由组件生成，不参与筛选/排序。
+const rowActionsField = "__oao_actions"
+
+// applyRowActionStates 把每个动作的 StateFunc 结果挂到对应行上。
+// 没有 StateFunc、或返回零值的动作不写，前端回退到表级声明。
+func applyRowActionStates(rows []map[string]any, states map[string]ActionStateFunc) {
+	if len(states) == 0 {
+		return
+	}
+	for _, row := range rows {
+		computed := make(map[string]ActionState, len(states))
+		for key, fn := range states {
+			if fn == nil {
+				continue
+			}
+			state := fn(row)
+			if state == (ActionState{}) {
+				continue
+			}
+			computed[key] = state
+		}
+		if len(computed) > 0 {
+			row[rowActionsField] = computed
+		}
+	}
 }
 
 // declaredValues 只留下动作 Form 里声明过的字段。

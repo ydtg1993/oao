@@ -104,8 +104,22 @@ type Action struct {
 	// （跳过图片 / JSON / 链接 / 自定义这些只读展示列）。EditAction 用的就是它。
 	DeriveForm bool
 
+	// StateFunc 按行计算这个动作的文案 / 禁用 / 隐藏；nil 表示表级默认（可见、可点、Label）。
+	// 服务端在列表响应里把结果挂到每行的 __oao_actions 下，前端按行渲染。
+	StateFunc ActionStateFunc
+
 	Handler ActionHandler
 }
+
+// ActionState 是一个动作在某一行的渲染状态。零值表示使用表级默认：可见、可点、Label 原样。
+type ActionState struct {
+	Label    string `json:"label,omitempty"`    // 覆盖表级 Label
+	Disabled bool   `json:"disabled,omitempty"` // 渲染成禁用按钮
+	Hidden   bool   `json:"hidden,omitempty"`   // 这一行不渲染这个动作
+}
+
+// ActionStateFunc 按行计算动作状态。row 是已按列声明裁剪过的行数据，只读。
+type ActionStateFunc func(row map[string]any) ActionState
 
 // Field 弹窗表单里的一个字段。
 type Field struct {
@@ -188,28 +202,29 @@ func RemoveAction(h ActionHandler) Action {
 }
 
 // resolveActions 补齐动作的留空项并做校验。
-func resolveActions(tableKey string, actions []Action, columns []ColumnInfo) ([]ActionInfo, []ActionHandler, error) {
+func resolveActions(tableKey string, actions []Action, columns []ColumnInfo) ([]ActionInfo, []ActionHandler, []ActionStateFunc, error) {
 	if len(actions) == 0 {
-		return []ActionInfo{}, nil, nil // 非 nil：序列化成 []，前端不用处理 null
+		return []ActionInfo{}, nil, nil, nil // 非 nil：序列化成 []，前端不用处理 null
 	}
 	infos := make([]ActionInfo, 0, len(actions))
 	handlers := make([]ActionHandler, 0, len(actions))
+	states := make([]ActionStateFunc, 0, len(actions))
 	seen := make(map[string]bool, len(actions))
 
 	for _, a := range actions {
 		if a.Key == "" {
-			return nil, nil, fmt.Errorf("oao: table %q 有操作未填 Key", tableKey)
+			return nil, nil, nil, fmt.Errorf("oao: table %q 有操作未填 Key", tableKey)
 		}
 		if !validKey(a.Key) {
 			// Key 会进路由 {prefix}/{table}/action/{key}
-			return nil, nil, fmt.Errorf("oao: table %q 操作 key %q 只能用字母、数字、下划线、连字符", tableKey, a.Key)
+			return nil, nil, nil, fmt.Errorf("oao: table %q 操作 key %q 只能用字母、数字、下划线、连字符", tableKey, a.Key)
 		}
 		if seen[a.Key] {
-			return nil, nil, fmt.Errorf("oao: table %q 操作 %q 重复", tableKey, a.Key)
+			return nil, nil, nil, fmt.Errorf("oao: table %q 操作 %q 重复", tableKey, a.Key)
 		}
 		seen[a.Key] = true
 		if a.Handler == nil {
-			return nil, nil, fmt.Errorf("oao: table %q 操作 %q 缺少 Handler", tableKey, a.Key)
+			return nil, nil, nil, fmt.Errorf("oao: table %q 操作 %q 缺少 Handler", tableKey, a.Key)
 		}
 		info := ActionInfo{
 			Key: a.Key, Label: orDefault(a.Label, a.Key), Tone: a.Tone, Confirm: a.Confirm,
@@ -219,11 +234,11 @@ func resolveActions(tableKey string, actions []Action, columns []ColumnInfo) ([]
 		} else {
 			for _, f := range a.Form {
 				if f.Name == "" {
-					return nil, nil, fmt.Errorf("oao: table %q 操作 %q 有表单项未填 Name", tableKey, a.Key)
+					return nil, nil, nil, fmt.Errorf("oao: table %q 操作 %q 有表单项未填 Name", tableKey, a.Key)
 				}
 				if !validKey(f.Name) {
 					// Name 会进 data-field 属性与 querySelector，限制字符集避免选择器注入
-					return nil, nil, fmt.Errorf("oao: table %q 操作 %q 表单项 %q 只能用字母、数字、下划线、连字符", tableKey, a.Key, f.Name)
+					return nil, nil, nil, fmt.Errorf("oao: table %q 操作 %q 表单项 %q 只能用字母、数字、下划线、连字符", tableKey, a.Key, f.Name)
 				}
 				fi := FieldInfo{
 					Name: f.Name, Label: orDefault(f.Label, humanize(f.Name)),
@@ -242,8 +257,9 @@ func resolveActions(tableKey string, actions []Action, columns []ColumnInfo) ([]
 		}
 		infos = append(infos, info)
 		handlers = append(handlers, a.Handler)
+		states = append(states, a.StateFunc)
 	}
-	return infos, handlers, nil
+	return infos, handlers, states, nil
 }
 
 // autoForm 按列声明推导编辑表单：
