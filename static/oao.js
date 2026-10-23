@@ -452,8 +452,14 @@ window.Oao = (function () {
                 return '<input class="oao-input" readonly value="' + esc(v) + '" style="width:'
                     + (col.max_len || 24) + 'ch">';
             case 'json':
-                return '<details class="oao-json"><summary>' + esc(String(v).slice(0, 60)) + '</summary>'
-                    + esc(typeof v === 'string' ? v : JSON.stringify(v, null, 2)) + '</details>';
+                var jsonText;
+                try {
+                    jsonText = JSON.stringify(typeof v === 'string' ? JSON.parse(v) : v, null, 2);
+                } catch (e) {
+                    jsonText = String(v);
+                }
+                return '<details class="oao-json"><summary>查看 JSON</summary>'
+                    + '<pre class="oao-json-body">' + esc(jsonText) + '</pre></details>';
             case 'custom':
                 return col.html || '';
             default:
@@ -909,9 +915,14 @@ window.Oao = (function () {
             st.lastSize = data.size;
 
             st.el.innerHTML = '<div class="oao-view">'
+                + (st.meta.header || '')
                 + filterBar(st.meta) + table(st.meta, st.rows, st.query.sort) + pager(st.meta, data)
                 + '</div>';
             bind(st, st.el.querySelector('.oao-view'), key);
+            // 宿主可监听这个事件给 Header 插槽填动态内容（比如推送统计卡片）。
+            document.dispatchEvent(new CustomEvent('oao:table-loaded', {
+                detail: { key: key, meta: st.meta, el: st.el }
+            }));
         } catch (e) {
             if (stale()) return;
             // 不能让失败把表格永久留在"加载中"——给个能重试的提示

@@ -516,6 +516,25 @@ func TestStaticFSContainsAssets(t *testing.T) {
 	}
 }
 
+// Header 插槽要进 /tables 元数据，并在每次表格加载后派发事件，宿主才能填动态卡片。
+func TestStaticJSDispatchesTableLoadedForHeader(t *testing.T) {
+	_, o := newTestServer(t, Table{Key: "t", Source: &fakeSource{},
+		Columns: []Column{{Field: "a"}}})
+	fsys, err := o.StaticFS()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := fs.ReadFile(fsys, "oao.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, token := range []string{"meta.header", "oao:table-loaded", "CustomEvent"} {
+		if !strings.Contains(string(data), token) {
+			t.Fatalf("oao.js 缺少 Header/事件支持：%q", token)
+		}
+	}
+}
+
 // 前端要真的读 __oao_actions：服务端算出了行状态，JS 没接的话等于没做。
 func TestStaticJSHandlesRowActionStates(t *testing.T) {
 	_, o := newTestServer(t, Table{Key: "t", Source: &fakeSource{},

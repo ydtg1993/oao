@@ -30,6 +30,10 @@ type Table struct {
 	PageSize    int    // 每页条数，默认 20
 	PageSizes   []int  // 可选每页条数，默认 {20, 50, 100}
 
+	// Header 是表格上方的自定义 HTML 插槽（受信任内容，不转义）。
+	// 需要动态数据时放一个带 id 的占位节点，监听 oao:table-loaded 事件再填。
+	Header string
+
 	Source Source // 数据来源，业务实现；必填
 }
 
@@ -80,6 +84,7 @@ type TableInfo struct {
 	DefaultSort string       `json:"default_sort,omitempty"`
 	PageSize    int          `json:"page_size"`
 	PageSizes   []int        `json:"page_sizes"`
+	Header      string       `json:"header,omitempty"`
 
 	source       Source
 	actionByName map[string]ActionHandler
@@ -127,6 +132,7 @@ func (t Table) resolve() (*TableInfo, error) {
 		Key: t.Key, Label: orDefault(t.Label, t.Key), Group: orDefault(t.Group, "General"),
 		IDField:     orDefault(t.IDField, defaultIDField),
 		DefaultSort: t.DefaultSort, PageSize: t.PageSize, PageSizes: t.PageSizes,
+		Header:  t.Header,
 		Filters: []FilterInfo{}, // 非 nil：序列化成 []，前端不用处理 null
 		Actions: []ActionInfo{},
 		source:  t.Source,

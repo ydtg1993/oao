@@ -105,7 +105,13 @@ textarea.oao-input { height: auto; padding: 8px 10px; resize: vertical; line-hei
     display: inline-block; max-width: 260px; vertical-align: bottom;
 }
 .oao-json > summary { cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.oao-json[open] { white-space: normal; word-break: break-all; max-width: 420px; }
+.oao-json[open] { white-space: normal; max-width: 520px; }
+.oao-json-body {
+    margin: 6px 0 0; padding: 8px; max-height: 40vh; overflow: auto;
+    white-space: pre-wrap; word-break: break-word;
+    border: 2px solid var(--border-color); background: var(--muted-fill);
+    color: var(--foreground); font-size: 11px; line-height: 1.5;
+}
 
 /* ---- 分页 ---- */
 .oao-pager { display: flex; gap: 10px; align-items: center; margin-top: 14px; font-size: 13px; flex-wrap: wrap; }
