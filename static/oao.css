@@ -122,6 +122,12 @@ textarea.oao-input { height: auto; padding: 8px 10px; resize: vertical; line-hei
     cursor: pointer; font-family: var(--font-display); font-weight: 700; color: #111;
 }
 .oao-pager .pg[disabled] { opacity: .4; cursor: default; }
+.oao-page-jump { display: inline-flex; align-items: center; gap: 6px; }
+.oao-page-input {
+    width: 72px; box-sizing: border-box; padding: 6px 8px;
+    border: 2px solid var(--border-color); background: var(--card);
+    color: var(--foreground); font: inherit; text-align: center;
+}
 
 /* ---- 加载 / 空态 ---- */
 .oao-loading { padding: 18px; font-weight: 700; opacity: .6; }

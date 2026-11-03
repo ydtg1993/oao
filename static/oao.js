@@ -817,6 +817,8 @@ window.Oao = (function () {
             + '<button class="pg" data-go="' + (data.page - 1) + '"' + (data.page <= 1 ? ' disabled' : '') + '>上一页</button>'
             + '<span>第 ' + data.page + ' / ' + last + ' 页</span>'
             + '<button class="pg" data-go="' + (data.page + 1) + '"' + (data.page >= last ? ' disabled' : '') + '>下一页</button>'
+            + '<label class="oao-page-jump">跳至 <input type="text" inputmode="numeric" class="oao-page-input" aria-label="跳转页码" data-page-input data-last="' + last + '" value="' + data.page + '"> 页</label>'
+            + '<button type="button" class="pg" data-page-jump>跳转</button>'
             + '</div>';
     }
 
@@ -968,6 +970,32 @@ window.Oao = (function () {
         root.querySelectorAll('[data-go]').forEach(function (b) {
             b.onclick = function () { st.query.page = parseInt(b.getAttribute('data-go'), 10); load(key); };
         });
+        var pageInput = root.querySelector('[data-page-input]');
+        var pageJump = root.querySelector('[data-page-jump]');
+        if (pageInput && pageJump) {
+            var jumpToPage = function () {
+                var value = pageInput.value.trim();
+                var last = Number(pageInput.getAttribute('data-last'));
+                var page = Number(value);
+                var error = !value ? '请输入页码'
+                    : !/^\d+$/.test(value) || !Number.isSafeInteger(page) ? '请输入有效的整数页码'
+                    : page < 1 || page > last ? '页码范围为 1 到 ' + last + ' 页' : '';
+                if (error) {
+                    Toast.show(error, 'err');
+                    pageInput.focus();
+                    return;
+                }
+                st.query.page = page;
+                load(key);
+            };
+            pageJump.onclick = jumpToPage;
+            pageInput.onkeydown = function (e) {
+                if (e.key === 'Enter' && !e.isComposing) {
+                    e.preventDefault();
+                    jumpToPage();
+                }
+            };
+        }
         var ps = root.querySelector('[data-pagesize]');
         if (ps) {
             Select.attach(ps, {

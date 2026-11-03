@@ -42,11 +42,13 @@ function makeEl(tag) {
 
 /** installDom 把 window / document / navigator 挂到 global（每个测试脚本开头调一次）。 */
 function installDom() {
+    global.CustomEvent = function (type, init) { this.type = type; this.detail = init && init.detail; };
     global.window = {
         addEventListener() {}, removeEventListener() {}, innerWidth: 1200, innerHeight: 800,
         getComputedStyle: () => ({ getPropertyValue: () => '' }), scrollX: 0, scrollY: 0,
     };
     global.document = {
+        dispatchEvent() { return true; },
         body: makeEl('body'),
         documentElement: makeEl('html'),
         createElement: makeEl,
