@@ -12,7 +12,11 @@ window.Oao = (function () {
     'use strict';
 
     var base = '/api/oao';
-    var state = {};      // key -> { key, seq, meta, rows, query, el }
+    // Query history belongs to a container, not a table key shared by the page.
+    var containers = new WeakMap();
+    var activeTables = new Set();
+    var mounts = new WeakMap();
+    var nextID = 0;
 
     /* ---------- 工具 ---------- */
     /** fmtNum 数字插值：契约上这些来自 Source，统一转一次保证是数字 */
@@ -44,30 +48,36 @@ window.Oao = (function () {
      */
     async function request(url, opts) {
         opts = opts || {};
+        var checkCurrent = function () {
+            if (opts.signal && opts.signal.aborted) throw opts.signal.reason || new Error('请求已取消');
+            if (opts.isCurrent && !opts.isCurrent()) throw new Error('请求已取消');
+        };
         var send = function () {
+            checkCurrent();
             var headers = authHeaders() || {};
             if (opts.body !== undefined) headers = Object.assign({ 'Content-Type': 'application/json' }, headers);
-            return fetch(url, { method: opts.method || 'GET', headers: headers, body: opts.body });
+            return fetch(url, { method: opts.method || 'GET', headers: headers, body: opts.body, signal: opts.signal });
         };
 
         var resp;
         try { resp = await send(); }
-        catch (e) { throw new Error('连接失败'); }
+        catch (e) { if (opts.signal && opts.signal.aborted) throw e; throw new Error('连接失败'); }
+        checkCurrent();
 
         if (resp.status === 401 && onUnauthorized) {
             var retried = false;
             try { retried = (await onUnauthorized()) === true; } catch (e) { retried = false; }
             if (retried) {
                 try { resp = await send(); }
-                catch (e) { throw new Error('连接失败'); }
+                catch (e) { if (opts.signal && opts.signal.aborted) throw e; throw new Error('连接失败'); }
             }
         }
         if (resp.status === 401) throw new Error('未授权：请检查访问凭据');
         return resp;
     }
 
-    async function api(path) {
-        var resp = await request(base + path);
+    async function api(path, signal) {
+        var resp = await request(base + path, { signal: signal });
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         return resp.json();
     }
@@ -77,10 +87,10 @@ window.Oao = (function () {
     var onUnauthorized = null;
 
     /** 提交操作；失败时抛出后端返回的提示语（业务用 oao.Fail 指定的） */
-    async function postAction(table, key, payload) {
+    async function postAction(table, key, payload, isCurrent) {
         var resp = await request(
             base + '/' + encodeURIComponent(table) + '/action/' + encodeURIComponent(key),
-            { method: 'POST', body: JSON.stringify(payload || {}) });
+            { method: 'POST', body: JSON.stringify(payload || {}), isCurrent: isCurrent });
         if (resp.status === 404) throw new Error('该操作不存在');
         if (!resp.ok) {
             var msg = (await resp.text()).trim();
@@ -91,27 +101,61 @@ window.Oao = (function () {
 
     /* ---------- 弹窗与提示（组件自带，只吃设计 token，不依赖宿主） ---------- */
     var Dialog = (function () {
-        var mask = null, elTitle = null, elBody = null, elActions = null, settle = null;
+        var mask = null, elTitle = null, elBody = null, elActions = null, settle = null, returnFocus = null, owner = null;
+
+        function focusable() {
+            if (!mask) return [];
+            return Array.from(mask.querySelectorAll('button, [href], input, select, textarea, [tabindex]')).filter(function (el) {
+                return !el.disabled && !el.hidden && el.type !== 'hidden' && el.getAttribute('tabindex') !== '-1'
+                    && (!el.getClientRects || el.getClientRects().length > 0);
+            });
+        }
+        function focusFirst() {
+            var first = focusable()[0] || mask.querySelector('.oao-dlg');
+            if (first) first.focus();
+        }
 
         function ensure() {
             if (mask) return;
             mask = document.createElement('div');
             mask.className = 'oao-mask';
-            mask.innerHTML = '<div class="oao-dlg" role="dialog" aria-modal="true">'
-                + '<h3></h3><div class="oao-dlg-body"></div><div class="oao-dlg-actions"></div></div>';
+            var titleID = 'oao-dialog-title-' + (++nextID);
+            mask.innerHTML = '<div class="oao-dlg" role="dialog" aria-modal="true" tabindex="-1" aria-labelledby="' + titleID + '">'
+                + '<h3 id="' + titleID + '"></h3><div class="oao-dlg-body"></div><div class="oao-dlg-actions"></div></div>';
             mask.addEventListener('mousedown', function (e) { if (e.target === mask) close(null); });
             document.body.appendChild(mask);
             elTitle = mask.querySelector('h3');
             elBody = mask.querySelector('.oao-dlg-body');
             elActions = mask.querySelector('.oao-dlg-actions');
             document.addEventListener('keydown', function (e) {
-                if (e.key === 'Escape' && mask.classList.contains('open')) close(null);
+                if (!mask.classList.contains('open')) return;
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    if (Popup.ownedBy(mask)) Popup.close(true);
+                    else close(null);
+                } else if (e.key === 'Tab') {
+                    if (Popup.ownedBy(mask)) Popup.close(true);
+                    var list = focusable();
+                    var first = list[0], last = list[list.length - 1];
+                    var active = document.activeElement;
+                    if (!first) { e.preventDefault(); focusFirst(); }
+                    else if (e.shiftKey && (active === first || !mask.contains(active))) { e.preventDefault(); last.focus(); }
+                    else if (!e.shiftKey && (active === last || !mask.contains(active))) { e.preventDefault(); first.focus(); }
+                }
+            });
+            document.addEventListener('focusin', function (e) {
+                if (mask.classList.contains('open') && !mask.contains(e.target) && !Popup.allowsFocus(mask, e.target)) focusFirst();
             });
         }
         function close(value) {
             if (!mask || !mask.classList.contains('open')) return;
+            Popup.closeWithin(mask);
             mask.classList.remove('open');
+            var previous = returnFocus; returnFocus = null;
             var done = settle; settle = null;
+            owner = null;
+            if (previous && previous.isConnected !== false && previous.focus) previous.focus();
             if (done) done(value);
         }
         /** 打开弹窗；bodyHTML 与 actions 由调用方组装（内容都要自己转义） */
@@ -120,6 +164,8 @@ window.Oao = (function () {
             // 已经开着就先关掉上一个：不然它的 Promise 永远不 resolve，
             // 调用方的 await 会一直挂着
             if (settle) close(null);
+            returnFocus = document.activeElement;
+            owner = opts.owner || null;
             mask.querySelector('.oao-dlg').classList.toggle('danger', !!opts.danger);
             elTitle.textContent = opts.title || '提示';
             elBody.innerHTML = opts.body || '';
@@ -137,8 +183,7 @@ window.Oao = (function () {
             });
             mask.classList.add('open');
             if (opts.onOpen) opts.onOpen(elBody);
-            var first = elBody.querySelector('input, select, textarea') || elActions.querySelector('.oao-btn');
-            if (first) first.focus();
+            focusFirst();
             return new Promise(function (resolve) { settle = resolve; });
         }
         return {
@@ -146,21 +191,29 @@ window.Oao = (function () {
             /** 确认框：resolve 布尔 */
             confirm: function (opts) {
                 return open({
-                    title: opts.title || '请确认', body: opts.body || '', danger: opts.danger,
+                    title: opts.title || '请确认', body: opts.body || '', danger: opts.danger, owner: opts.owner,
                     actions: [
                         { label: opts.cancelLabel || '取消', value: false },
                         { label: opts.okLabel || '确定', value: true, tone: opts.danger ? 'err' : '' }
                     ]
                 }).then(function (v) { return v === true; });
             },
-            close: function () { close(null); }
+            close: function () { close(null); },
+            closeWithin: function (container) {
+                if (owner === container || (container.contains && ((owner && container.contains(owner)) || (returnFocus && container.contains(returnFocus))))) close(null);
+            }
         };
     })();
 
     var Toast = (function () {
         var box = null;
         function ensure() {
-            if (!box) { box = document.createElement('div'); box.className = 'oao-toasts'; document.body.appendChild(box); }
+            if (!box) {
+                box = document.createElement('div'); box.className = 'oao-toasts';
+                box.setAttribute('role', 'status'); box.setAttribute('aria-live', 'polite');
+                box.setAttribute('aria-relevant', 'additions');
+                document.body.appendChild(box);
+            }
             return box;
         }
         return {
@@ -301,7 +354,7 @@ window.Oao = (function () {
         var head = '';
         if (acts.length > MAX_FLAT_ACTIONS) {
             // 前两个平铺，其余进「更多」——常用的还在手边，少用的不占地方
-            head = '<button class="oao-btn oao-btn-sm" data-more="' + rowIdx + '">更多 ▾</button>';
+            head = '<button type="button" class="oao-btn oao-btn-sm" aria-haspopup="menu" aria-expanded="false" data-more="' + rowIdx + '">更多 ▾</button>';
             acts = acts.slice(0, 2);
         }
         return '<div class="oao-actions">'
@@ -315,12 +368,14 @@ window.Oao = (function () {
         var more = visibleActions(st.meta, row).slice(2);
         Popup.open({
             trigger: trigger,
+            role: 'menu',
             itemSel: '.oao-select-item',
             enterPicks: true,
             closeOnPick: true,
             render: function (panel, hl) {
                 panel.innerHTML = more.map(function (a, i) {
-                    return '<div class="oao-select-item' + (i === hl ? ' hl' : '') + '" role="menuitem" data-i="' + i + '">'
+                    return '<div class="oao-select-item' + (i === hl ? ' hl' : '') + '" role="menuitem" tabindex="-1" aria-disabled="'
+                        + !!actionState(row, a).disabled + '" data-i="' + i + '">'
                         + '<span class="dot ' + esc(a.tone || '') + '"></span>'
                         + '<span>' + esc(actionLabel(a, actionState(row, a))) + '</span></div>';
                 }).join('');
@@ -330,16 +385,17 @@ window.Oao = (function () {
                 if (!a) return;
                 // 面板先收掉再跑：动作可能弹确认/表单框，别和它叠在一起
                 Popup.close(false);
-                runAction(st.meta, a, st.rows[rowIdx]);
+                runAction(st, a, st.rows[rowIdx]);
             },
         });
     }
 
     /** 打开表单弹窗：resolve 表单值对象；取消 / Esc 返回 null */
-    function openForm(title, fields, row) {
-        var bodyEl = null;
+    function openForm(title, fields, row, owner) {
+        var bodyEl = null, submitted = null;
         return Dialog.open({
             title: title,
+            owner: owner,
             body: '<div class="oao-form">' + fields.map(function (f) { return fieldHtml(f, row); }).join('') + '</div>'
                 + '<div class="oao-form-err"></div>',
             actions: [
@@ -352,14 +408,16 @@ window.Oao = (function () {
                             bodyEl.querySelector('.oao-form-err').textContent = err;
                             return false; // 校验没过，别关
                         }
+                        // Closing restores focus and may synchronously open a new
+                        // dialog, so capture this form before its DOM can be reused.
+                        submitted = readForm(bodyEl, fields);
                         return true;
                     }
                 }
             ],
             onOpen: function (body) { bodyEl = body; bindFormSelects(body, fields); }
         }).then(function (ok) {
-            // 弹窗关闭时不清空 body，所以这里还能读到值
-            return ok === true ? readForm(bodyEl, fields) : null;
+            return ok === true ? submitted : null;
         });
     }
 
@@ -372,7 +430,11 @@ window.Oao = (function () {
     var inFlightActions = {};
 
     /** 执行一个操作：可选确认框 → 可选表单 → 提交 → 反馈并刷新 */
-    async function runAction(meta, action, row) {
+    async function runAction(st, action, row) {
+        if (!st.active || st.destroyed) return;
+        var lifetime = st.lifetime;
+        var isCurrent = function () { return st.active && !st.destroyed && st.lifetime === lifetime; };
+        var meta = st.meta;
         var state = actionState(row, action);
         if (state.disabled) return;
         var label = actionLabel(action, state);
@@ -396,22 +458,27 @@ window.Oao = (function () {
             if (action.confirm) {
                 var ok = await Dialog.confirm({
                     title: label, body: '<p>' + esc(action.confirm) + '</p>',
-                    danger: action.tone === 'err', okLabel: label
+                    danger: action.tone === 'err', okLabel: label, owner: st.el
                 });
                 if (!ok) return;
             }
+            if (!isCurrent()) return;
             if (action.form && action.form.length) {
-                var values = await openForm(label, action.form, row);
+                var values = await openForm(label, action.form, row, st.el);
                 if (values === null) return;
                 payload.values = values;
             }
 
+            if (!isCurrent()) return;
             try {
-                await postAction(meta.key, action.key, payload);
+                await postAction(meta.key, action.key, payload, isCurrent);
+                // The write may finish on the server after its view has gone away.
+                // Do not let that old callback announce or refresh a replacement view.
+                if (!isCurrent()) return;
                 Toast.show(label + '成功', 'ok');
-                await load(meta.key);
+                await refresh(meta.key);
             } catch (e) {
-                Toast.show(label + '失败：' + e.message, 'err', 5000);
+                if (isCurrent()) Toast.show(label + '失败：' + e.message, 'err', 5000);
             }
         } finally {
             // 确认框取消、表单取消、请求成功或失败 —— 都从这里放行下一次
@@ -486,6 +553,7 @@ window.Oao = (function () {
             if (panel) return;
             panel = document.createElement('div');
             panel.className = 'oao-select-content';
+            panel.id = 'oao-popup-' + (++nextID);
             panel.setAttribute('role', 'listbox');
             panel.hidden = true;
             document.body.appendChild(panel);
@@ -494,10 +562,12 @@ window.Oao = (function () {
             });
             document.addEventListener('keydown', function (e) {
                 if (!cur) return;
-                if (e.key === 'Escape') { e.preventDefault(); close(true); }
+                if (e.defaultPrevented) return;
+                if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); close(true); }
                 else if (e.key === 'ArrowDown') { e.preventDefault(); move(1); }
                 else if (e.key === 'ArrowUp') { e.preventDefault(); move(-1); }
-                else if (e.key === 'Enter' && cur.enterPicks) { e.preventDefault(); pick(hl); }
+                else if ((e.key === 'Enter' || e.key === ' ') && cur.enterPicks) { e.preventDefault(); pick(hl); }
+                else if (e.key === 'Tab') close(false);
             });
             window.addEventListener('resize', function () { if (cur) place(); });
             window.addEventListener('scroll', function () { if (cur) place(); }, true);
@@ -505,7 +575,7 @@ window.Oao = (function () {
 
         /** place 贴在触发器下方；下面放不下就往上翻 */
         function place() {
-            if (!cur.trigger.isConnected) return; // 触发器已被重绘换掉，别再摆
+            if (cur.trigger.isConnected === false) { close(false); return; }
             var r = cur.trigger.getBoundingClientRect();
             panel.style.minWidth = r.width + 'px';
             panel.style.left = Math.round(r.left) + 'px';
@@ -522,7 +592,8 @@ window.Oao = (function () {
         function render() {
             if (!cur) return;
             cur.render(panel, hl);
-            items().forEach(function (el) {
+            items().forEach(function (el, i) {
+                el.id = panel.id + '-item-' + i;
                 el.addEventListener('mousedown', function (e) {
                     e.preventDefault();  // 别让触发器失焦
                     // mousedown 后可能重建面板节点，若不拦住冒泡，
@@ -534,8 +605,12 @@ window.Oao = (function () {
                     hl = parseInt(el.getAttribute('data-i'), 10);
                     items().forEach(function (x) { x.classList.remove('hl'); });
                     el.classList.add('hl');
+                    cur.trigger.setAttribute('aria-activedescendant', el.id);
                 });
             });
+            var active = items()[hl];
+            if (active) cur.trigger.setAttribute('aria-activedescendant', active.id);
+            else cur.trigger.removeAttribute('aria-activedescendant');
         }
 
         function pick(i) {
@@ -549,8 +624,10 @@ window.Oao = (function () {
         function move(step) {
             var list = items();
             if (!list.length) return;
-            hl = (hl + step + list.length) % list.length;
+            hl = hl < 0 ? (step < 0 ? list.length - 1 : 0) : (hl + step + list.length) % list.length;
             list.forEach(function (el, i) { el.classList.toggle('hl', i === hl); });
+            cur.trigger.setAttribute('aria-activedescendant', list[hl].id);
+            if (cur.role === 'menu' && list[hl].focus) list[hl].focus();
             var hit = panel.querySelector('.hl');
             if (hit && hit.scrollIntoView) hit.scrollIntoView({ block: 'nearest' });
         }
@@ -560,11 +637,18 @@ window.Oao = (function () {
             if (cur) close(false);
             cur = state;
             hl = -1;
+            panel.setAttribute('role', state.role || 'listbox');
+            if (state.trigger.id) panel.setAttribute('aria-labelledby', state.trigger.id);
+            else panel.removeAttribute('aria-labelledby');
+            if (state.multiple) panel.setAttribute('aria-multiselectable', 'true');
+            else panel.removeAttribute('aria-multiselectable');
             panel.hidden = false;
+            state.trigger.setAttribute('aria-controls', panel.id);
             state.trigger.setAttribute('aria-expanded', 'true');
             render();
             place();
             if (state.trigger.focus) state.trigger.focus();
+            if (state.role === 'menu') move(1);
         }
 
         function close(refocus) {
@@ -575,6 +659,7 @@ window.Oao = (function () {
             hl = -1;
             if (trigger) {
                 trigger.setAttribute('aria-expanded', 'false');
+                trigger.removeAttribute('aria-activedescendant');
                 if (refocus && trigger.focus) trigger.focus();
             }
         }
@@ -582,6 +667,10 @@ window.Oao = (function () {
         return {
             open: open,
             close: close,
+            move: move,
+            closeWithin: function (container) { if (cur && container.contains && container.contains(cur.trigger)) close(false); },
+            ownedBy: function (container) { return !!(cur && container.contains && container.contains(cur.trigger)); },
+            allowsFocus: function (container, target) { return !!(cur && container.contains(cur.trigger) && panel.contains(target)); },
             /** 面板开着时原地重画（多选改值后用） */
             refresh: function () { if (cur) { render(); place(); } },
             /** 判断某个触发器对应的面板是不是开着 */
@@ -641,7 +730,7 @@ window.Oao = (function () {
                     placeholder: opts.placeholder,
                     onChange: opts.onChange || function () {},
                     itemSel: '.oao-select-item',
-                    enterPicks: !opts.multiple,   // 多选时 Enter 不用来选中
+                    enterPicks: true,
                     closeOnPick: !opts.multiple,
                     render: function (panel, hl) {
                         renderTrigger(state);
@@ -655,29 +744,32 @@ window.Oao = (function () {
                             var at = v.indexOf(String(opt.value));
                             if (at > -1) v.splice(at, 1); else v.push(String(opt.value));
                             state.value = v;
-                            state.onChange(v);
                         } else {
                             state.value = String(opt.value);
-                            state.onChange(state.value);
                         }
+                        renderTrigger(state);
+                        state.onChange(state.value);
                     },
                 };
                 trigger.__oaoSelect = state; // 重绘后重新 attach 时复用它
                 if (!trigger.__oaoBound) {
                     trigger.__oaoBound = true;
+                    if (!trigger.id) trigger.id = 'oao-select-' + (++nextID);
+                    trigger.setAttribute('role', 'combobox');
                     trigger.setAttribute('aria-haspopup', 'listbox');
                     trigger.setAttribute('aria-expanded', 'false');
                     trigger.addEventListener('click', function (e) {
                         e.preventDefault();
                         e.stopPropagation();
                         if (Popup.isOpen(trigger)) Popup.close(true);
-                        else Popup.open(state);
+                        else Popup.open(trigger.__oaoSelect);
                     });
                     trigger.addEventListener('keydown', function (e) {
-                        if (e.key === 'Enter' || e.key === ' ') {
+                        if ((e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown' || e.key === 'ArrowUp') && !Popup.isOpen(trigger)) {
                             e.preventDefault();
                             e.stopPropagation(); // 否则 document 上的 Enter 分支会再选一次（此时 hl 还是 -1）
-                            Popup.open(state);
+                            Popup.open(trigger.__oaoSelect);
+                            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') Popup.move(e.key === 'ArrowDown' ? 1 : -1);
                         }
                     });
                 }
@@ -688,20 +780,20 @@ window.Oao = (function () {
     })();
 
     /* ---------- 筛选栏 ---------- */
-    function filterBar(meta) {
+    function filterBar(meta, st) {
         if (!meta.filters || meta.filters.length === 0) return '';
-        var st = state[meta.key];
         return '<div class="oao-filters">' + meta.filters.map(function (f) {
             var val = st.query.filter[f.name] || '';
-            var label = '<label>' + esc(f.label) + '</label>';
+            var id = 'oao-filter-' + st.id + '-' + f.name;
+            var label = '<label for="' + esc(id) + '">' + esc(f.label) + '</label>';
             var opts = f.options ? Object.keys(f.options) : [];
 
             // 有选项的下拉（含多选）统一走 Select 组件
             if (f.widget === 'select' && opts.length) {
                 var multiple = f.op === 'in';
                 var cur = multiple ? (val ? val.split(',') : []) : val;
-                return '<div class="oao-field"><label>' + esc(f.label) + '</label>'
-                    + '<button type="button" class="oao-select-trigger" data-filter="' + esc(f.name) + '"'
+                return '<div class="oao-field">' + label
+                    + '<button type="button" class="oao-select-trigger" id="' + esc(id) + '" data-filter="' + esc(f.name) + '"'
                     + (multiple ? ' data-multiple="1"' : '') + '>' + '<span class="v"></span>' + CARET + '</button>'
                     + '</div>';
             }
@@ -709,17 +801,17 @@ window.Oao = (function () {
                 var lo = '', hi = '';
                 if (val.indexOf('..') > -1) { var p = val.split('..'); lo = p[0]; hi = p[1]; }
                 return '<div class="oao-field range">' + label + '<div class="range">'
-                    + '<input class="oao-input" type="date" data-filter="' + esc(f.name) + '" data-part="lo" value="' + esc(lo) + '">'
+                    + '<input class="oao-input" type="date" id="' + esc(id) + '" aria-label="' + esc(f.label) + ' 开始" data-filter="' + esc(f.name) + '" data-part="lo" value="' + esc(lo) + '">'
                     + '<i>~</i>'
-                    + '<input class="oao-input" type="date" data-filter="' + esc(f.name) + '" data-part="hi" value="' + esc(hi) + '">'
+                    + '<input class="oao-input" type="date" aria-label="' + esc(f.label) + ' 结束" data-filter="' + esc(f.name) + '" data-part="hi" value="' + esc(hi) + '">'
                     + '</div></div>';
             }
             if (f.widget === 'date') {
-                return '<div class="oao-field">' + label + '<input class="oao-input" type="date" data-filter="'
+                return '<div class="oao-field">' + label + '<input class="oao-input" type="date" id="' + esc(id) + '" data-filter="'
                     + esc(f.name) + '" value="' + esc(val) + '"></div>';
             }
             return '<div class="oao-field">' + label
-                + '<input class="oao-input" data-filter="' + esc(f.name) + '" placeholder="筛选" value="'
+                + '<input class="oao-input" id="' + esc(id) + '" data-filter="' + esc(f.name) + '" placeholder="筛选" value="'
                 + esc(val) + '"></div>';
         }).join('') + '</div>';
     }
@@ -742,7 +834,7 @@ window.Oao = (function () {
                 onChange: function (v) {
                     st.query.filter[name] = multiple ? (v || []).join(',') : v;
                     st.query.page = 1;
-                    load(key);
+                    load(st);
                 },
             });
         });
@@ -795,9 +887,9 @@ window.Oao = (function () {
                 arrow = (s.desc ? ' ▼' : ' ▲') + (s.total > 1 ? String(s.index + 1) : '');
                 aria = s.desc ? 'descending' : 'ascending';
             }
-            return '<th class="sortable" scope="col" aria-sort="' + aria + '"' + width
-                + ' data-sort="' + esc(c.name) + '" title="点击排序，Shift+点击多字段排序">'
-                + esc(c.label) + arrow + '</th>';
+            return '<th class="sortable" scope="col" aria-sort="' + aria + '"' + width + '>'
+                + '<button type="button" class="oao-sort" data-sort="' + esc(c.name)
+                + '" title="点击排序，Shift+点击多字段排序">' + esc(c.label) + arrow + '</button></th>';
         }).join('') + (hasActions ? '<th scope="col">操作</th>' : '');
         var body = rows.map(function (r, i) {
             return '<tr>' + cols.map(function (c) { return '<td>' + cell(c, r) + '</td>'; }).join('')
@@ -813,7 +905,7 @@ window.Oao = (function () {
         var last = Math.max(1, Math.ceil(data.total / data.size));
         return '<div class="oao-pager">'
             + '<span>共 ' + data.total + ' 条</span>'
-            + '<button type="button" class="oao-select-trigger oao-pagesize" data-pagesize><span class="v"></span>' + CARET + '</button>'
+            + '<button type="button" class="oao-select-trigger oao-pagesize" aria-label="每页条数" data-pagesize><span class="v"></span>' + CARET + '</button>'
             + '<button class="pg" data-go="' + (data.page - 1) + '"' + (data.page <= 1 ? ' disabled' : '') + '>上一页</button>'
             + '<span>第 ' + data.page + ' / ' + last + ' 页</span>'
             + '<button class="pg" data-go="' + (data.page + 1) + '"' + (data.page >= last ? ' disabled' : '') + '>下一页</button>'
@@ -832,11 +924,61 @@ window.Oao = (function () {
         if (opts && opts.filter) st.query.filter = Object.assign({}, opts.filter);
     }
 
-    function stateOf(key) {
-        if (!state[key]) {
-            state[key] = { key: key, seq: 0, meta: null, rows: [], query: { page: 1, size: 0, search: '', sort: '', filter: {} }, el: null };
+    function stateOf(container, key) {
+        var bucket = containers.get(container);
+        if (!bucket) {
+            bucket = { active: null, tables: Object.create(null) };
+            containers.set(container, bucket);
         }
-        return state[key];
+        if (bucket.active) deactivate(container);
+        var st = bucket.tables[key];
+        if (!st) {
+            st = bucket.tables[key] = { id: ++nextID, key: key, seq: 0, meta: null, rows: [],
+                query: { page: 1, size: 0, search: '', sort: '', filter: {} },
+                el: container, controller: null, active: false, destroyed: false, lifetime: 0 };
+        }
+        bucket.active = st;
+        st.lifetime++;
+        st.active = true;
+        activeTables.add(st);
+        return st;
+    }
+
+    /** Stop a view while retaining this container's query history for navigation. */
+    function deactivate(container) {
+        var bucket = containers.get(container);
+        if (bucket && bucket.active) {
+            var st = bucket.active;
+            st.active = false;
+            st.seq++;
+            if (st.controller) st.controller.abort();
+            st.controller = null;
+            activeTables.delete(st);
+            bucket.active = null;
+        }
+        Popup.closeWithin(container);
+        Dialog.closeWithin(container);
+    }
+
+    function destroy(container) {
+        var mounted = mounts.get(container);
+        if (mounted) { mounted.destroy(); return; }
+        deactivate(container);
+        var bucket = containers.get(container);
+        if (bucket) Object.keys(bucket.tables).forEach(function (key) { bucket.tables[key].destroyed = true; });
+        containers.delete(container);
+        container.innerHTML = '';
+    }
+
+    function refresh(key) {
+        return Promise.allSettled(Array.from(activeTables).filter(function (st) {
+            return st.key === key && !st.destroyed;
+        }).map(function (st) { return load(st, true); }));
+    }
+
+    function refreshInstance(container) {
+        var bucket = containers.get(container);
+        return bucket && bucket.active ? load(bucket.active, true) : Promise.resolve();
     }
 
     function queryString(q) {
@@ -878,26 +1020,61 @@ window.Oao = (function () {
         st.query.filter = filter;
     }
 
+    function rememberFocus(st) {
+        var active = document.activeElement;
+        if (!active || !st.el.contains || !st.el.contains(active)) return null;
+        var attrs = ['data-sort', 'data-filter', 'data-pagesize', 'data-page-input', 'data-page-jump', 'data-go', 'data-action', 'data-more'];
+        var attr = attrs.filter(function (name) { return active.hasAttribute(name); })[0];
+        if (!attr) return null;
+        var saved = { node: active, attr: attr, value: active.getAttribute(attr), part: active.getAttribute('data-part') };
+        if (attr === 'data-go') saved.text = active.textContent;
+        if (attr === 'data-action' || attr === 'data-more') {
+            var row = st.rows[Number(active.getAttribute(attr === 'data-more' ? attr : 'data-row'))];
+            saved.rowID = row && row[st.meta.id_field || 'id'];
+        }
+        return saved;
+    }
+
+    function restoreFocus(st, saved) {
+        if (!saved) return;
+        var active = document.activeElement;
+        // A response must never steal focus from another view or an open dialog.
+        if (active && active !== saved.node && active !== document.body) return;
+        var candidate = Array.from(st.el.querySelectorAll('[' + saved.attr + ']')).filter(function (el) {
+            if (el.disabled) return false;
+            if (saved.attr === 'data-go') return el.textContent === saved.text;
+            if (saved.attr === 'data-action' || saved.attr === 'data-more') {
+                var row = st.rows[Number(el.getAttribute(saved.attr === 'data-more' ? saved.attr : 'data-row'))];
+                return saved.rowID != null && row && row[st.meta.id_field || 'id'] === saved.rowID
+                    && (saved.attr === 'data-more' || el.getAttribute(saved.attr) === saved.value);
+            }
+            return el.getAttribute(saved.attr) === saved.value && el.getAttribute('data-part') === saved.part;
+        })[0];
+        if (candidate) candidate.focus();
+    }
+
     /**
-     * elOwner 记录"某块容器当前归哪张表"。
+     * 每个容器记录当前表实例；每个实例有独立查询序号。
      * 切表时后发先至的慢响应，如果还往旧容器里画，就会把新表盖掉 —— 用它挡。
      */
-    var elOwner = new WeakMap();
+    async function load(st, reportFailure) {
+        if (!st || !st.el || !st.active || st.destroyed) return;
+        var key = st.key;
 
-    async function load(key) {
-        var st = stateOf(key);
-        if (!st.el) return;
-        st.key = key;
-
-        // 双重守卫：seq 挡住同一张表的连续查询，elOwner 挡住"容器已被别的表接管"
+        // seq 挡住同一实例的连续查询，bucket.active 挡住容器切表。
         var seq = ++st.seq;
         var el = st.el;
-        elOwner.set(el, key);
-        var stale = function () { return st.seq !== seq || elOwner.get(el) !== key; };
+        if (st.controller) st.controller.abort();
+        var controller = new AbortController();
+        st.controller = controller;
+        var stale = function () {
+            var bucket = containers.get(el);
+            return st.seq !== seq || st.destroyed || !st.active || !bucket || bucket.active !== st || controller.signal.aborted;
+        };
 
         try {
             if (!st.meta) {
-                var metasResp = await api('/tables');
+                var metasResp = await api('/tables', controller.signal);
                 if (stale()) return;
                 st.meta = metasResp.tables.filter(function (t) { return t.key === key; })[0];
                 // 用默认排序初始化，让表头一开始就显示出排序方向
@@ -905,9 +1082,10 @@ window.Oao = (function () {
             }
             if (!st.meta) throw new Error('未知表格：' + key);
 
-            Select.close(); // 面板挂在 body 上，重绘清不掉它
+            var savedFocus = rememberFocus(st);
+            Popup.closeWithin(el); // Only this view owns the popup being replaced.
             st.el.innerHTML = '<div class="oao-loading">加载中...</div>';
-            var data = await api('/' + encodeURIComponent(key) + '?' + queryString(st.query));
+            var data = await api('/' + encodeURIComponent(key) + '?' + queryString(st.query), controller.signal);
             if (stale()) return;
 
             st.meta.columns = data.columns;
@@ -918,9 +1096,10 @@ window.Oao = (function () {
 
             st.el.innerHTML = '<div class="oao-view">'
                 + (st.meta.header || '')
-                + filterBar(st.meta) + table(st.meta, st.rows, st.query.sort) + pager(st.meta, data)
+                + filterBar(st.meta, st) + table(st.meta, st.rows, st.query.sort) + pager(st.meta, data)
                 + '</div>';
             bind(st, st.el.querySelector('.oao-view'), key);
+            restoreFocus(st, savedFocus);
             // 宿主可监听这个事件给 Header 插槽填动态内容（比如推送统计卡片）。
             document.dispatchEvent(new CustomEvent('oao:table-loaded', {
                 detail: { key: key, meta: st.meta, el: st.el }
@@ -929,6 +1108,9 @@ window.Oao = (function () {
             if (stale()) return;
             // 不能让失败把表格永久留在"加载中"——给个能重试的提示
             renderLoadError(st, e);
+            if (reportFailure) throw e;
+        } finally {
+            if (st.controller === controller) st.controller = null;
         }
     }
 
@@ -941,15 +1123,15 @@ window.Oao = (function () {
             + '<button class="oao-btn oao-btn-sm" data-retry>重试</button>'
             + '</div></div>';
         var btn = st.el.querySelector('[data-retry]');
-        if (btn) btn.onclick = function () { load(st.key); };
+        if (btn) btn.onclick = function () { load(st); };
     }
 
     function bind(st, root, key) {
-        root.querySelectorAll('th[data-sort]').forEach(function (th) {
+        root.querySelectorAll('[data-sort]').forEach(function (th) {
             th.onclick = function (e) {
                 st.query.sort = toggleSort(st.query.sort, th.getAttribute('data-sort'), e.shiftKey);
                 st.query.page = 1;
-                load(key);
+                load(st);
             };
         });
         root.querySelectorAll('[data-action]').forEach(function (b) {
@@ -957,7 +1139,7 @@ window.Oao = (function () {
                 var key2 = b.getAttribute('data-action');
                 var action = (st.meta.actions || []).filter(function (a) { return a.key === key2; })[0];
                 if (!action) return;
-                runAction(st.meta, action, st.rows[parseInt(b.getAttribute('data-row'), 10)]);
+                runAction(st, action, st.rows[parseInt(b.getAttribute('data-row'), 10)]);
             };
         });
         root.querySelectorAll('[data-more]').forEach(function (b) {
@@ -968,7 +1150,7 @@ window.Oao = (function () {
             };
         });
         root.querySelectorAll('[data-go]').forEach(function (b) {
-            b.onclick = function () { st.query.page = parseInt(b.getAttribute('data-go'), 10); load(key); };
+            b.onclick = function () { st.query.page = parseInt(b.getAttribute('data-go'), 10); load(st); };
         });
         var pageInput = root.querySelector('[data-page-input]');
         var pageJump = root.querySelector('[data-page-jump]');
@@ -986,7 +1168,7 @@ window.Oao = (function () {
                     return;
                 }
                 st.query.page = page;
-                load(key);
+                load(st);
             };
             pageJump.onclick = jumpToPage;
             pageInput.onkeydown = function (e) {
@@ -1003,7 +1185,7 @@ window.Oao = (function () {
                     return { value: String(n), label: n + ' 条/页' };
                 }),
                 value: String(st.lastSize || st.meta.page_size),
-                onChange: function (v) { st.query.size = parseInt(v, 10); st.query.page = 1; load(key); },
+                onChange: function (v) { st.query.size = parseInt(v, 10); st.query.page = 1; load(st); },
             });
         }
         bindSelects(st, root, key);
@@ -1026,15 +1208,19 @@ window.Oao = (function () {
                 }
                 if (ev === 'keydown') st.query.search = '';
                 st.query.page = 1;
-                load(key);
+                load(st);
             });
         });
     }
 
     /* ---------- 表格清单（带缓存） ---------- */
     var metas = null;
-    async function loadTables(force) {
-        if (!metas || force) metas = (await api('/tables')).tables || [];
+    async function loadTables(force, signal) {
+        if (!metas || force) {
+            var loaded = (await api('/tables', signal)).tables || [];
+            if (signal && signal.aborted) throw signal.reason || new Error('请求已取消');
+            metas = loaded;
+        }
         return metas;
     }
 
@@ -1058,8 +1244,63 @@ window.Oao = (function () {
      */
     async function mount(el, opts) {
         opts = opts || {};
+        destroy(el);
+        var disposed = false, current = null, pageLife = null, navigation = 0;
+        var mountController = new AbortController();
+        var content = null, titleEl = null;
+        var apiObj = {
+            reload: function () { return current && !disposed ? select(current) : Promise.resolve(); },
+            select: function (key) { return select(key); },
+            open: function (key, options) { return select(key, options); },
+            setTitle: function (t) { if (!disposed && titleEl) titleEl.textContent = t; },
+            current: function () { return current; },
+            content: function () { return content; },
+            destroy: destroyMount,
+        };
+        var mountRecord = { destroy: destroyMount };
+        mounts.set(el, mountRecord);
+
+        function clean(life) {
+            if (!life || life.cleaned || !life.cleanup) return;
+            life.cleaned = true;
+            // A failing host disposer must not prevent the new page from opening.
+            try { life.cleanup(); } catch (e) { if (window.console) window.console.error('Oao page cleanup failed', e); }
+        }
+        function failPage(life, page, error) {
+            if (life.controller.signal.aborted || pageLife !== life) return;
+            life.controller.abort();
+            clean(life);
+            // An abort listener may have navigated to a newer page.
+            if (disposed || pageLife !== life) return;
+            var message = error && error.message ? error.message : error == null ? '未知错误' : String(error);
+            page.innerHTML = '<div class="oao-error">页面渲染失败：' + esc(message) + '</div>';
+        }
+        function leavePage() {
+            var life = pageLife; pageLife = null;
+            // Invalidate the old table before host callbacks can navigate again.
+            if (content) deactivate(content);
+            if (life) { life.controller.abort(); clean(life); }
+        }
+        function destroyMount() {
+            if (disposed) return;
+            disposed = true;
+            navigation++;
+            mountController.abort();
+            // Release ownership before running user cleanup, which may mount a
+            // replacement into this same element synchronously.
+            if (mounts.get(el) === mountRecord) {
+                mounts.delete(el);
+                el.innerHTML = '';
+                el.classList.remove('oao-host');
+            }
+            current = null;
+            leavePage();
+            if (content) destroy(content);
+        }
+
         var tables = [];
-        try { tables = await loadTables(true); } catch (e) { tables = []; }
+        try { tables = await loadTables(true, mountController.signal); } catch (e) { tables = []; }
+        if (disposed) return apiObj;
 
         var hostPages = (opts.pages || []).slice();
         var menu = buildMenu(hostPages, tables);
@@ -1083,67 +1324,66 @@ window.Oao = (function () {
 
         var sideFoot = el.querySelector('.oao-side-foot');
         var topRight = el.querySelector('.oao-top-right');
-        var titleEl = el.querySelector('.oao-top h1');
-        var content = el.querySelector('.oao-content');
-
-        var current = null;
-        // api 给本实例用：每个 mount 各有一份，多实例不会串
-        var apiObj = {
-            /** 重新加载当前页 */
-            reload: function () { if (current) select(current); },
-            /** 切到某个页面或表格（按 key） */
-            select: function (key) { select(key); },
-            /** 改标题（页面渲染里调） */
-            setTitle: function (t) { titleEl.textContent = t; },
-            /** 当前页面 key */
-            current: function () { return current; },
-            /** 页面容器，宿主页面想自己往里面塞东西时用 */
-            content: function () { return content; },
-        };
+        titleEl = el.querySelector('.oao-top h1');
+        content = el.querySelector('.oao-content');
 
         if (opts.sidebarFooter) fillSlot(sideFoot, opts.sidebarFooter, apiObj);
         if (opts.headerRight) fillSlot(topRight, opts.headerRight, apiObj);
         async function select(key, opts) {
+            if (disposed) return;
             var item = menu.byKey[key];
             if (!item) return;
-            // 内容区只有一个：把其它表的在途请求作废，避免慢响应回来盖住新表
-            Object.keys(state).forEach(function (k) {
-                if (k !== key) state[k].seq++;
-            });
+            var selected = ++navigation;
+            leavePage();
+            if (disposed || selected !== navigation) return;
             current = key;
             el.querySelectorAll('.oao-nav-item').forEach(function (b) {
                 b.classList.toggle('active', b.getAttribute('data-oao-key') === key);
             });
             titleEl.textContent = item.label;
-            Select.close(); // 切页时把浮在外面的下拉面板收掉
             content.innerHTML = '';
             if (item.table) {
-                var st = stateOf(item.table);
-                st.el = content;
+                var st = stateOf(content, item.table);
                 st.query.page = 1;
                 seedQuery(st, opts);
-                await load(item.table);
+                await load(st);
             } else {
                 // 宿主页面单独包一层：它自己滚，不挤占表格页的布局
                 var page = document.createElement('div');
                 page.className = 'oao-page';
                 content.appendChild(page);
+                var life = { controller: new AbortController(), cleanup: null, cleaned: false };
+                pageLife = life;
+                var context = Object.assign({}, apiObj, { signal: life.controller.signal });
+                ['open', 'select', 'reload', 'setTitle', 'destroy'].forEach(function (method) {
+                    context[method] = function () {
+                        if (!life.controller.signal.aborted && pageLife === life) return apiObj[method].apply(apiObj, arguments);
+                        if (method === 'open' || method === 'select' || method === 'reload') return Promise.resolve();
+                    };
+                });
                 try {
-                    item.render(page, apiObj);
+                    var result = item.render(page, context);
+                    if (typeof result === 'function') life.cleanup = result;
+                    else if (result && typeof result.then !== 'function' && typeof result.destroy === 'function') life.cleanup = function () { result.destroy(); };
+                    // A Promise is not a disposer. Observe failures only; the host
+                    // owns asynchronous work and cancels it via context.signal.
+                    else if (result && typeof result.then === 'function') Promise.resolve(result).catch(function (error) {
+                        failPage(life, page, error);
+                    });
+                    if (life.controller.signal.aborted) clean(life);
                 } catch (e) {
-                    page.innerHTML = '<div class="oao-error">页面渲染失败：' + esc(e.message) + '</div>';
+                    failPage(life, page, e);
                 }
             }
         }
         /** open(key, opts)：切到某张表/某个宿主页面；opts.filter 是预置筛选（见 render） */
-        apiObj.open = function (key, opts) { return select(key, opts); };
-
         el.querySelectorAll('.oao-nav-item').forEach(function (b) {
             b.onclick = function () { select(b.getAttribute('data-oao-key')); };
         });
 
+        // Keep onReady's existing "shell ready" timing; table data may still be loading.
         if (menu.order.length) select(menu.order[0]);
-        if (opts.onReady) opts.onReady(apiObj);
+        if (!disposed && opts.onReady) opts.onReady(apiObj);
         return apiObj;
     }
 
@@ -1203,13 +1443,15 @@ window.Oao = (function () {
          * 不传 = 保持上一次的条件（与以前一样）。
          */
         render: async function (container, key, opts) {
-            var st = stateOf(key);
-            st.el = container;
+            if (mounts.has(container)) destroy(container);
+            var st = stateOf(container, key);
             st.query.page = 1;
             seedQuery(st, opts);
-            await load(key);
+            await load(st);
         },
-        /** 重新加载某张表（外部操作后刷新用） */
-        refresh: function (key) { return load(key); }
+        /** Refresh every active view of a table; one failure never skips another. */
+        refresh: refresh,
+        refreshInstance: refreshInstance,
+        destroy: destroy
     };
 })();

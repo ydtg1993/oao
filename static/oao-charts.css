@@ -1,0 +1,107 @@
+/* Optional SVG charts. Host tokens are consumed with readable standalone fallbacks. */
+.oao-chart {
+    --oao-chart-paper: var(--card, #fffef8);
+    --oao-chart-ink: var(--foreground, #24231f);
+    --oao-chart-muted: var(--muted-foreground, #6b6659);
+    --oao-chart-rule: var(--border-color, #26251f);
+    --oao-chart-soft: var(--muted-fill, #f4f1e8);
+    --oao-chart-accent: var(--primary, #f3c941);
+    --oao-chart-color-0: #946600;
+    --oao-chart-color-1: #2875ba;
+    --oao-chart-color-2: #c44e44;
+    --oao-chart-color-3: #44834c;
+    --oao-chart-color-4: #8862b2;
+    --oao-chart-color-5: #ab572c;
+    --oao-chart-color-6: #377f83;
+    --oao-chart-color-7: #935c7b;
+    box-sizing: border-box; min-width: 0; padding: 16px;
+    color: var(--oao-chart-ink); background: var(--oao-chart-paper);
+    border: 2px solid var(--oao-chart-rule); border-radius: var(--oao-radius, 0);
+    font: 13px/1.5 var(--font-body, ui-sans-serif, system-ui, sans-serif);
+}
+.oao-chart *, .oao-chart *::before, .oao-chart *::after { box-sizing: border-box; }
+.oao-chart-header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.oao-chart-title { margin: 0; min-width: 0; overflow-wrap: anywhere; font: 700 14px/1.5 var(--font-display, ui-sans-serif, system-ui, sans-serif); }
+.oao-chart-unit { color: var(--oao-chart-muted); font-size: 11px; flex-shrink: 0; max-width: 40%; overflow-wrap: anywhere; }
+.oao-chart-description { margin: 5px 0 12px; color: var(--oao-chart-muted); font-size: 12px; overflow-wrap: anywhere; }
+.oao-chart-plot { position: relative; min-width: 0; margin-top: 10px; }
+.oao-chart-plot:focus-visible, .oao-chart-data > summary:focus-visible { outline: 3px solid var(--oao-chart-accent); outline-offset: 3px; }
+.oao-chart-svg { display: block; width: 100%; height: auto; overflow: visible; }
+.oao-chart-axis { fill: var(--oao-chart-muted); font: 11px var(--font-mono, ui-monospace, monospace); }
+.oao-chart-grid { stroke: var(--oao-chart-muted); stroke-opacity: .16; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.oao-chart-zero { stroke: var(--oao-chart-ink); stroke-opacity: .65; stroke-width: 1.3; vector-effect: non-scaling-stroke; }
+.oao-chart-line { stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.oao-chart-point { stroke: var(--oao-chart-paper); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.oao-chart-point, .oao-chart-bar, .oao-chart-slice { cursor: crosshair; }
+.oao-chart-point:focus, .oao-chart-bar:focus { outline: none; stroke: var(--oao-chart-ink); stroke-width: 3; }
+.oao-chart-slice:focus { outline: 2px solid var(--oao-chart-ink); outline-offset: 3px; filter: brightness(1.12); }
+.oao-chart-point:hover, .oao-chart-bar:hover { stroke: var(--oao-chart-ink); stroke-width: 2; }
+.oao-chart-point.is-missing { opacity: 0; pointer-events: none; }
+.oao-chart-point.is-missing:focus { opacity: 1; fill: var(--oao-chart-paper); stroke-dasharray: 2 2; }
+.oao-chart-slice.is-zero { pointer-events: none; }
+.oao-chart-total { fill: var(--oao-chart-ink); font: 700 27px var(--font-mono, ui-monospace, monospace); }
+.oao-chart-tooltip {
+    position: absolute; z-index: 2; top: 0; left: 8px; max-width: calc(100% - 16px);
+    padding: 7px 10px; pointer-events: none; overflow-wrap: anywhere;
+    color: var(--oao-chart-ink); background: var(--oao-chart-paper); border: 2px solid var(--oao-chart-rule);
+    box-shadow: 3px 3px 0 var(--shadow-color, #24231f); font-size: 12px;
+}
+.oao-chart-tooltip[hidden] { display: none; }
+.oao-chart-legend { display: flex; flex-wrap: wrap; gap: 5px 16px; list-style: none; padding: 0; margin: 10px 0; }
+.oao-chart-legend > li { display: flex; align-items: center; min-width: 0; max-width: 100%; gap: 6px; font-size: 11px; }
+.oao-chart-swatch { width: 18px; border-top: 3px solid currentColor; flex-shrink: 0; }
+.oao-chart-legend-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.oao-chart-legend-value { color: var(--oao-chart-muted); font-family: var(--font-mono, ui-monospace, monospace); }
+.oao-chart-empty, .oao-chart-error { display: grid; place-items: center; min-height: 160px; margin: 0; padding: 20px; text-align: center; overflow-wrap: anywhere; background: var(--oao-chart-soft); color: var(--oao-chart-muted); }
+.oao-chart-error { color: var(--destructive, #b42a26); border-left: 3px solid currentColor; }
+.oao-chart-data { margin-top: 12px; border-top: 1px solid var(--oao-chart-muted); }
+.oao-chart-data > summary { padding: 9px 1px 1px; width: fit-content; cursor: pointer; font-size: 11px; color: var(--oao-chart-muted); }
+.oao-chart-table-scroll { overflow: auto; max-height: 300px; margin-top: 9px; }
+/* Host table themes often give every th an inverse color and td-only stripes/hover. */
+.oao-chart .oao-chart-data table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--oao-chart-ink); background: var(--oao-chart-paper); }
+.oao-chart .oao-chart-data th, .oao-chart .oao-chart-data td {
+    padding: 7px 9px; text-align: left; border: 0; border-bottom: 1px solid var(--oao-chart-muted);
+    color: var(--oao-chart-ink); background: var(--oao-chart-paper); font: inherit;
+    text-transform: none; letter-spacing: normal; white-space: normal; overflow-wrap: anywhere;
+}
+.oao-chart .oao-chart-data thead tr { background: var(--oao-chart-soft); }
+.oao-chart .oao-chart-data thead th { position: sticky; top: 0; background: var(--oao-chart-soft); font-weight: 700; }
+.oao-chart .oao-chart-data tbody th { font-weight: 500; }
+.oao-chart .oao-chart-data tbody tr,
+.oao-chart .oao-chart-data tbody tr:nth-child(n) > th,
+.oao-chart .oao-chart-data tbody tr:nth-child(n) > td { background: var(--oao-chart-paper); }
+.oao-chart .oao-chart-data tbody tr:hover,
+.oao-chart .oao-chart-data tbody tr:hover > th,
+.oao-chart .oao-chart-data tbody tr:hover > td { background: var(--oao-chart-soft); }
+.oao-chart-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.oao-chart[data-chart-type="sparkline"] .oao-chart-empty { min-height: 70px; }
+.oao-chart-changed .oao-chart-svg { animation: oao-chart-reveal var(--oao-motion-duration, 180ms) ease-out both; }
+@keyframes oao-chart-reveal { from { opacity: .62; } to { opacity: 1; } }
+/* Match common host theme switches; no global theme or typography is changed. */
+[data-theme="dark"] .oao-chart, .dark .oao-chart {
+    --oao-chart-paper: var(--card, #24241f); --oao-chart-ink: var(--foreground, #f3f0dc);
+    --oao-chart-muted: var(--muted-foreground, #bcb9a9); --oao-chart-rule: var(--border-color, #d5cfaa);
+    --oao-chart-soft: var(--muted-fill, #2e2f29);
+    --oao-chart-color-0: #f3cd4f; --oao-chart-color-1: #80b9ee; --oao-chart-color-2: #f38c7e;
+    --oao-chart-color-3: #91c697; --oao-chart-color-4: #bda2ed; --oao-chart-color-5: #e8ab7e;
+    --oao-chart-color-6: #83c5c7; --oao-chart-color-7: #dfa3ca;
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]):not(.light):not([data-theme="dark"]) .oao-chart {
+        --oao-chart-paper: var(--card, #24241f); --oao-chart-ink: var(--foreground, #f3f0dc);
+        --oao-chart-muted: var(--muted-foreground, #bcb9a9); --oao-chart-rule: var(--border-color, #d5cfaa);
+        --oao-chart-soft: var(--muted-fill, #2e2f29); --oao-chart-color-0: #f3cd4f;
+        --oao-chart-color-1: #80b9ee; --oao-chart-color-2: #f38c7e; --oao-chart-color-3: #91c697;
+        --oao-chart-color-4: #bda2ed; --oao-chart-color-5: #e8ab7e; --oao-chart-color-6: #83c5c7; --oao-chart-color-7: #dfa3ca;
+    }
+}
+@media (max-width: 480px) {
+    .oao-chart { padding: 12px; }
+    .oao-chart-header { gap: 6px; }
+    .oao-chart-legend { gap: 4px 10px; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .oao-chart, .oao-chart *, .oao-chart *::before, .oao-chart *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+[data-oao-motion="reduce"] .oao-chart *, [data-oao-motion="reduced"] .oao-chart *,
+[data-motion="reduce"] .oao-chart *, [data-motion="reduced"] .oao-chart * { animation: none !important; transition: none !important; }

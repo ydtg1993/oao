@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"embed"
+	"flag"
 	"fmt"
 	"io/fs"
 	"log"
@@ -39,6 +40,11 @@ type Order struct {
 }
 
 func main() {
+	port := flag.Int("port", 8090, "loopback demo port (1-65535)")
+	flag.Parse()
+	if *port < 1 || *port > 65535 {
+		log.Fatal("port must be between 1 and 65535")
+	}
 	src := &orderSource{rows: seed()}
 
 	o, err := oao.New(oao.Config{
@@ -144,8 +150,9 @@ func main() {
 	}
 	mux.Handle("/", http.FileServer(http.FS(web)))
 
-	log.Println("oao demo: http://localhost:8090")
-	log.Fatal(http.ListenAndServe(":8090", mux))
+	addr := fmt.Sprintf("127.0.0.1:%d", *port)
+	log.Printf("oao demo: http://%s", addr)
+	log.Fatal(http.ListenAndServe(addr, mux))
 }
 
 // orderSource 内存数据源 —— 组件不碰数据，这些全在"业务层"。

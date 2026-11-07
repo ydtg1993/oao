@@ -1,11 +1,12 @@
 # oao
 
-一个**表格组件**：把业务给的数据，按声明渲染成后台的表格页。
+一组**后台展示组件**：把宿主提供的声明和数据渲染成表格、SVG 图表，以及可选的页面外壳与动效。
 
-**它只做声明 + 透传，不碰数据层**——不发 SQL、不认识你的模型、不懂业务语义。
-数据由业务实现 `Source` 提供，前端发来的操作由组件转发给业务的 `Handler`。
+**不碰数据层**：不发 SQL、不认识业务模型、不推断指标口径。
+表格数据由业务实现 `Source` 提供，前端操作转发给业务的 `Handler`；图表只消费宿主传入的数据，不请求接口、不存储历史。
 
-- **零外部依赖**（纯标准库），只吃宿主提供的 CSS 设计 token
+- **零外部运行依赖**：Go 使用标准库，浏览器组件使用原生 JS/CSS/SVG
+- 延续宿主 CSS 设计 token；图表也提供独立使用时的默认颜色与字体
 - 前端可脱离任何框架单独跑：`go run ./cmd/demo`
 
 ```bash
@@ -53,8 +54,125 @@ Oao.mount(document.getElementById('app'), { ... });     // 连外壳一起搭，
 跑起来看效果：
 
 ```bash
-go run ./cmd/demo      # http://localhost:8090
+go run ./cmd/demo                  # http://127.0.0.1:8090
+go run ./cmd/demo -port 18094      # 可选回环端口，避免占用其它本地服务
 ```
+
+demo 的“图表与动效”页包含四类图表、更新样本、主题切换与减弱动效。数据为本地合成样本。
+
+## 前端模块与生命周期
+
+表格与外壳仍只需 `oao.js` / `oao.css`。需要图表或统一动效时，再加载相应独立模块；使用完整组件时按以下顺序加载：
+
+```html
+<link rel="stylesheet" href="/static/oao/oao.css">
+<link rel="stylesheet" href="/static/oao/oao-charts.css">
+<link rel="stylesheet" href="/static/oao/oao-motion.css">
+<script src="/static/oao/oao.js"></script>
+<script src="/static/oao/oao-motion.js"></script>
+<script src="/static/oao/oao-charts.js"></script>
+```
+
+路径取决于宿主挂载的 `StaticFS()`。图表可单独加载 `oao-charts.js/css`；如果同时使用 `oao.js`，须先加载它，避免重新初始化 `Oao` 覆盖扩展。
+
+### 表格实例
+
+```js
+await Oao.render(left, 'order', { filter: { status: '1' } });
+await Oao.render(right, 'order', { filter: { status: '2' } });
+await Oao.refreshInstance(left);        // 只刷新这个容器的当前表格
+const results = await Oao.refresh('order'); // 刷新该 key 的所有活跃视图
+Oao.destroy(left);                     // 中止 GET、关闭所属弹层、清理状态和 DOM
+```
+
+| API | 返回与语义 |
+| --- | --- |
+| `Oao.render(container, key, opts?)` | `Promise<void>`；每次进入第一页，保留本容器该表已有的其它查询条件；传入 `opts.filter` 时整体替换筛选 |
+| `Oao.refresh(key)` | 返回 `Promise.allSettled` 结果数组；每个活跃同 key 视图独立刷新，某个失败不阻止其它视图 |
+| `Oao.refreshInstance(container)` | `Promise<void>`；保留当前查询条件；无活跃表时直接完成，加载失败时拒绝并在视图显示错误 |
+| `Oao.destroy(container)` | 销毁该容器内的表格或由 `mount` 创建的外壳；重复调用安全 |
+
+查询状态按“容器 + 表 key”保存，同表多容器互不覆盖。同容器重复 `render`、切表或销毁会使前一次表格生命周期失效，并中止前一 GET；响应还会经过实例/序号检查。即使后来回到同一 key，旧响应也不能重新挂载或刷新新页面。`refresh` / `refreshInstance` 保留当前生命周期。刷新会尝试恢复已有筛选、分页、排序及行操作控件的焦点，行操作按主键匹配；焦点已转到另一个视图或弹窗时不抢回。
+
+行操作 POST 绑定发起它的表格生命周期。生命周期失效后，迟到成功或失败不会显示 Toast、触发列表刷新，也不会在异步换凭据完成后重试旧 POST。**这不等于撤销已经发送的服务端写入**；请求可能已在服务端成功，业务幂等、状态查询和必要的补偿由宿主负责。
+
+`Oao.render` 的加载错误会显示在表格内；需要从调用端检查刷新结果时，使用 `refreshInstance` 的拒绝或 `refresh` 的 settled 结果。它们不是业务写入的幂等或一致性保证。
+
+### SVG 图表
+
+```js
+const target = document.getElementById('trend');
+const options = {
+    type: 'line', title: '本次页面观测', unit: '项', xType: 'time',
+    description: '空点表示未取得观测值。',
+    series: [{
+        key: 'queue', label: '排队',
+        points: [{ x: 1760000000000, y: 3 },
+                 { x: 1760000005000, y: null },
+                 { x: 1760000015000, y: 0 }]
+    }]
+};
+const chart = Oao.charts.create(target, options);
+chart.update({ ...options, series: nextSeries }); // 完整替换 options，不做增量合并
+chart.resize();                                 // 隐藏容器重新显示时也可主动调用
+chart.destroy();                                // 离页时释放观察器、监听器和动画
+```
+
+`create(container, options)` 同步返回 `{ update(options), resize(), destroy() }`。同一容器再次 `create` 会先销毁旧图表；每个实例独立。销毁后的 `update` / `resize` 不起作用。容器必须是 DOM 元素，否则抛出 `TypeError`；数据不合法时显示明确错误态。用 `chart.destroy()` 清理图表，不能只清空宿主 DOM，也不能用表格的 `Oao.destroy()` 代替。
+
+| option | 说明 |
+| --- | --- |
+| `type` | 必填：`line`、`bar`、`donut`、`sparkline` |
+| `title` / `unit` / `description` | 标题、显示单位与口径说明；组件不换算单位，所有文本均按纯文本渲染 |
+| `series` | 折线/迷你图：`[{ key, label, color?, points: [{ x, y }] }]` |
+| `data` | 柱形/环形：`[{ key, label, value }]` |
+| `horizontal` | 柱形图为 `true` 时横向排列；默认纵向 |
+| `xType` | `number`（默认）或 `time`；时间 x 为有效的毫秒时间戳，标签使用浏览器本地时间 |
+| `emptyText` | 空态文案，默认“暂无可用数据” |
+| `error` | 非空错误文本；直接显示错误态，下一次完整 update 可恢复正常数据 |
+
+```js
+const categories = [
+    { key: 'done', label: '完成', value: 18 },
+    { key: 'failed', label: '失败', value: 2 }
+];
+Oao.charts.create(barTarget, { type: 'bar', horizontal: true, data: categories });
+Oao.charts.create(donutTarget, { type: 'donut', unit: '项', data: categories });
+Oao.charts.create(sparkTarget, { ...options, type: 'sparkline' });
+```
+
+数据规则：
+
+- 每个系列和每个分类须提供稳定、非空字符串 `key`，同一列表内不能重复；`label` 留空时使用 key。
+- 每图最多 8 系列、每系列最多 300 点；柱形最多 50 分类，环形最多 12 分类。无效项、稀疏数组与超限会显示错误，不截断数据。
+- x、y、value 必须是有限的 JS 数字，只有 y 允许 `null`。每个系列内 x 必须严格递增，重复或乱序会报错，组件不自动排序。
+- 折线/迷你图按真实数值 x 间距绘制；`null` 形成断线，数据表显示“无观测”。正常 0 不当成缺失。单点可显示，所有点都缺失时显示空态。
+- 折线、迷你图与柱形支持负值并绘制零基线；环形只接受非负 value，总和为 0 时显示空态，总和超出有限数值范围时报错。
+- `series[].color` 可选，支持十六进制、命名色、rgb/hsl 或单个 `var(--token)`；默认配色兼容深浅主题。标签与标题不接受 HTML。
+
+键盘：Tab 进入图表入口，方向键逐个查看数值，Home/End 到首尾，Escape 回入口；悬停同样显示数值。每图提供“查看数据表”，长分类名称、窄屏省略标签及完整数值可在这里读取。轴/图例允许缩短数值，数据表和可访问数值标签保留数值精度。
+
+刷新保留点位（系列 key + x）或分类 key 对应的焦点，以及数据表展开状态；选中项消失时焦点回入口。展开的数据表在轮询或 resize 后保留滚动容器焦点及横纵滚动位置，短暂错误后也恢复滚动位置；焦点已到外部控件时不抢回。更新后表变短、滚动容器无法原生聚焦时，焦点回图表入口。相同完整配置不会重建 DOM 或重复播放动效，普通轮询不进入 live region。宿主提供历史窗口、断网缺口与刷新节奏；组件不会推断业务上的断点。
+
+图表消费 `--card`、`--foreground`、`--muted-foreground`、`--border-color`、`--muted-fill`、`--primary` 与字体 token，并有独立可读默认值。宿主可在 `.oao-chart` 覆盖 `--oao-chart-color-0` 至 `--oao-chart-color-7`。支持祖先的 `data-theme="dark"` / `.dark`，未指定主题时提供系统深色回退。
+
+图表数据表的表头、首列和 hover 状态统一按图表主题 token 设置文字与底色，同时明确字号、边框和换行规则，隔离宿主全局表格样式。本轮修复了 Papa 浅主题下表头白字浅底、正文首列黑底，以及全局 hover、边框和 nowrap 规则造成的显示冲突。
+
+### 动效偏好
+
+```js
+Oao.motion.get();                  // 'system' 或 'reduced'，返回用户偏好
+Oao.motion.set('reduced');         // 或 'system'；其它值会抛错
+Oao.motion.reduced();              // 综合系统偏好后的实际布尔结果
+Oao.motion.animate(panel, 'enter'); // 220ms 淡入/轻微位移
+Oao.motion.animate(panel);         // 160ms 数据变化淡入，实际数值立即更新
+Oao.motion.cancel(panel);
+Oao.motion.cancelAll();
+```
+
+偏好保存于当前浏览器的 `localStorage['oao-motion']`，存储不可用时仍在内存生效；跟随系统与跨页签存储变化。系统请求减弱动效时，不提供强制开启动画的选项。页面隐藏或 `pagehide` 会取消运行中的动效；不支持 Web Animations API 时不播放动画。
+
+`oao-motion.css` 提供 `--oao-motion-fast`（120ms）、`--oao-motion-normal`（180ms）、`--oao-motion-enter`（220ms）与 `--oao-motion-ease`。减弱规则覆盖当前文档的动画、过渡和平滑滚动；图表独立 CSS 也遵守 `prefers-reduced-motion`。图表会在有数据变化时调用可选的 motion API，重绘、隐藏或销毁时取消；不加载 motion 模块也能正常使用图表。
 
 ---
 
@@ -67,7 +185,7 @@ go run ./cmd/demo      # http://localhost:8090
 | `ActionHandler` | 业务 | **响应操作**：改哪个库、做什么校验 |
 | 组件 | — | 把声明变成页面、把请求规范化后转发、把结果映射成响应 |
 
-组件与业务之间只有两个契约：**`Query`（进）** 和 **`ActionRequest`（进）**。
+表格 HTTP 层向业务传入两个契约：**`Query`（进）** 和 **`ActionRequest`（进）**。图表的前端数据契约见上节。
 
 ### 组件的职责边界
 
@@ -249,7 +367,7 @@ if v := q.Get("created_at"); !v.Empty() {
 
 ## 排序
 
-点表头排序，**Shift + 点击**追加第二个排序键（表头会标上优先级序号 `▲1` `▼2`）。
+点表头排序，也可 Tab 到表头按钮后按 Enter / 空格。**Shift + 点击或键盘激活**追加第二个排序键（表头会标上优先级序号 `▲1` `▼2`）。
 
 ```go
 // 在 Source 里取：
@@ -520,7 +638,30 @@ Oao.mount(document.getElementById('app'), {
 **插槽**：`headerRight` / `sidebarFooter` 收 HTML 字符串或 `(el, api) => void`。
 宿主自己的样式（头像、徽章之类）由宿主补——组件只负责把它放进正确的位置。
 
-**api**：`open(key)` 切页、`reload()` 重载当前页、`setTitle(t)` 改标题、`current()` 当前 key、`content()` 内容容器。
+`Oao.mount(container, opts)` 返回 `Promise<api>`。**api**：`open(key, opts?)` 切页并支持表格预置筛选、`select(key)` 切页、`reload()` 重选当前页、`setTitle(t)` 改标题、`current()` 当前 key、`content()` 内容容器、`destroy()` 销毁外壳。表格页 `reload()` 会回到第一页；保留页码的刷新使用 `Oao.refreshInstance(api.content())`。
+
+`pages[].render(el, page)` 的第二参数包含这些方法以及本次页面生命周期的 `page.signal`。它可以**同步返回清理函数或 `{ destroy() {} }`**；切页、reload 和销毁时先中止 signal，再调用一次清理。异步请求需要自行使用 signal，定时器、图表和其它资源由清理函数释放：
+
+```js
+render: function (el, page) {
+    const chart = Oao.charts.create(el, { type: 'line', title: '宿主指标', series: [] });
+    // /api/my-chart 是宿主自有接口，返回上述图表 options。
+    fetch('/api/my-chart', { signal: page.signal })
+        .then(function (response) {
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+            return response.json();
+        })
+        .then(function (options) { if (!page.signal.aborted) chart.update(options); })
+        .catch(function (error) {
+            if (!page.signal.aborted) chart.update({ type: 'line', title: '宿主指标', error: error.message });
+        });
+    return function () { chart.destroy(); };
+}
+```
+
+不要用 `async render()` 返回清理函数：Promise 的解析结果不会被当作生命周期钩子。renderer 同步抛错或返回的 Promise 拒绝时，组件中止该页的 `signal` 并显示错误；迟到失败不会覆盖后续页面。宿主直接改 DOM 的异步代码仍须检查 signal。
+
+页面失效后，旧 `page.open/select/reload/setTitle/destroy` 不再作用于当前外壳；其中 `open/select/reload` 仍返回已完成的 `Promise<void>`，可继续使用 `await` 或 `.then()`。清理或 abort 回调触发新导航时，以新导航为准；清理内销毁或重新 mount 也不会被旧流程覆盖。插槽 `headerRight/sidebarFooter` 仍只接收字符串或填充函数，不具有页面的清理钩子。
 
 > `mount` 会给容器加上 `oao-host` 类接管布局（撑满父级且允许被压窄）。
 > 不想要就用 `render`，自己搭壳。
@@ -646,9 +787,34 @@ Oao.init({
   它们会进 URL 路由和 `data-*` 属性。操作请求体上限 1 MiB。
 - **无障碍**：表头带 `aria-sort`，横向滚动容器带 `role="region"` / `tabindex="0"` / `aria-label`
   （溢出时键盘也能滚），下拉触发器带 `aria-haspopup="listbox"` 与 `aria-expanded`。
+  下拉支持 Enter 打开、方向键选择、Enter 确认和 Escape 关闭；排序使用原生按钮。
+  弹窗提供可访问名称、Tab 焦点约束和关闭后的焦点恢复；Toast 使用 polite 状态播报，图表常规刷新不播报。
   另外三处**字段级白名单**也由组件把住，业务不用自己防：
   1. **列表下发**：`rows` 只保留列声明过的字段。Source 里的 `SELECT *` 不会把未声明的列（密码哈希、
      大 JSON）带到浏览器。想下发但不显示，声明成 `Hidden`。
   2. **表单提交**：`ActionRequest.Values` 只保留该动作 `Form` 里声明过的字段。
      客户端多塞的字段进不到 `Updates(req.Values)`。
   3. **筛选参数**：未声明的 `filter[...]` 不会进 `Query.Filter`。
+
+## 开发验证
+
+以下 Node 脚本加载真实生产 JS，通过最小 DOM 假件验证行为，不需要 npm 依赖：
+
+```bash
+node testdata/oao_guard_test.js static/oao.js
+node testdata/oao_render_test.js static/oao.js
+node testdata/oao_pager_test.js static/oao.js
+node testdata/oao_a11y_test.js static/oao.js
+node testdata/oao_lifecycle_test.js static/oao.js
+node testdata/oao_lifecycle_race_test.js static/oao.js
+node testdata/oao_charts_test.js static/oao-charts.js
+node testdata/oao_motion_test.js static/oao-motion.js
+go test ./...
+go vet ./...
+go build ./...
+go test -race ./...
+```
+
+当前共八个 Node 脚本；`oao_lifecycle_race_test.js` 含 15 条生产 JS 行为回归，覆盖迟到 POST、凭据重试、mount 清理重入、renderer 失败和弹窗表单快照。`oao_a11y_test.js` 另覆盖单选标签即时更新、焦点恢复重入后旧弹窗正确结算；`oao_charts_test.js` 共 24 项（23 组生产 JS 行为与 1 组 CSS 隔离守卫），包含展开数据表的焦点、滚动位置与宿主表格样式隔离回归。
+
+race 需要平台支持及可用的 C 工具链。Node 假件验证不替代真实浏览器的 SVG 布局、主题对比、窄屏和辅助技术验收。首批变更、已执行验证及发布顺序见 [2026-11-07 可视化交付记录](docs/2026-11-07-visuals-release.md)。

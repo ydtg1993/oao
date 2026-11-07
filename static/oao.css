@@ -313,6 +313,17 @@ textarea.oao-input { height: auto; padding: 8px 10px; resize: vertical; line-hei
 .oao-view tbody tr:hover td { background: var(--blue); }
 .oao-view th.sortable { cursor: pointer; user-select: none; }
 .oao-view th.sortable:hover { background: var(--primary); color: #111; }
+.oao-sort {
+    display: block; width: 100%; border: 0; padding: 0;
+    background: transparent; color: inherit; font: inherit;
+    text-align: inherit; cursor: pointer;
+}
+.oao-sort:focus-visible,
+.oao-btn:focus-visible,
+.oao-nav-item:focus-visible,
+.oao-pager .pg:focus-visible {
+    outline: 2px solid var(--primary, #d2a600); outline-offset: 3px;
+}
 /* 唯一的横向滚动容器：少了它宽表格会把整页顶开 */
 /* 表格区域自己成为滚动容器：超长纵向滚、超宽横向滚，
    外层的 .oao-content 就不会被表格撑长（表头也吸顶，滚动时始终可见）。

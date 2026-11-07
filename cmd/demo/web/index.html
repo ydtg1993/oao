@@ -6,10 +6,15 @@
     <title>Oao — Demo</title>
     <link rel="stylesheet" href="/preview.css">
     <link rel="stylesheet" href="/static/oao/oao.css">
+    <link rel="stylesheet" href="/static/oao/oao-charts.css">
+    <link rel="stylesheet" href="/static/oao/oao-motion.css">
+    <style>.demo-charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}.demo-chart{min-width:0;padding:20px;background:var(--card,#fff);border:2px solid var(--border-color,#111)}@media(max-width:720px){.demo-charts{grid-template-columns:1fr}}</style>
 </head>
 <body>
 <div id="app"></div>
 <script src="/static/oao/oao.js"></script>
+<script src="/static/oao/oao-motion.js"></script>
+<script src="/static/oao/oao-charts.js"></script>
 <script>
     // 演示 Oao.mount：外壳（侧边栏 + 内容区）由组件搭，
     // 宿主只给「自己的页面 + 两个插槽」。整个 demo 从 30 行缩到十几行。
@@ -41,6 +46,27 @@
 
         // 宿主自己的页面（不是 oao 表格），跟表格一起进菜单
         pages: [
+            {
+                key: 'visuals', label: '图表与动效', group: '概览',
+                render: function (el, api) {
+                    el.innerHTML = '<h2>图表与动效</h2><p>本地合成数据 · 支持键盘查看数值与展开数据表；离页释放图表。</p><p><button class="oao-btn" id="demo-change">更新样本</button> <button class="oao-btn" id="demo-motion">减弱动效</button></p><div class="demo-charts"><div class="demo-chart" id="demo-line"></div><div class="demo-chart" id="demo-bar"></div><div class="demo-chart" id="demo-donut"></div><div class="demo-chart" id="demo-spark"></div></div>';
+                    var charts=[],step=0,now=Date.now();
+                    function paint() {
+                        var data=[{key:'a',label:'分类 A',value:12+step},{key:'b',label:'分类 B',value:5},{key:'c',label:'分类 C',value:2}];
+                        var options=[
+                            {type:'line',title:'折线 · 真实时间间隔与断点',xType:'time',unit:'项',series:[{key:'a',label:'观测',points:[{x:now,y:-2},{x:now+3000,y:4},{x:now+6000,y:null},{x:now+12000,y:12+step}]}]},
+                            {type:'bar',title:'横向柱形',horizontal:true,unit:'项',data:data},
+                            {type:'donut',title:'环形分布',unit:'项',data:data},
+                            {type:'sparkline',title:'迷你趋势',unit:'%',series:[{key:'a',label:'占比',points:[{x:0,y:10},{x:1,y:20},{x:2,y:5},{x:3,y:32+step}]}]}
+                        ];
+                        ['line','bar','donut','spark'].forEach(function (key,i) { if(charts[i])charts[i].update(options[i]);else charts[i]=Oao.charts.create(el.querySelector('#demo-'+key),options[i]); });
+                    }
+                    paint();
+                    el.querySelector('#demo-change').onclick=function(){step=(step+3)%18;paint();};
+                    el.querySelector('#demo-motion').onclick=function(){var reduce=Oao.motion.get()!=='reduced';Oao.motion.set(reduce?'reduced':'system');this.textContent=reduce?'跟随系统动效':'减弱动效';};
+                    return function(){charts.forEach(function(chart){chart.destroy();});};
+                }
+            },
             {
                 key: 'welcome', label: '首页', group: '概览',
                 render: function (el, api) {

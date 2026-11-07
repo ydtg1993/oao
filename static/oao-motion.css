@@ -1,0 +1,13 @@
+:root { --oao-motion-fast:120ms; --oao-motion-normal:180ms; --oao-motion-enter:220ms; --oao-motion-ease:cubic-bezier(.2,.7,.3,1); }
+.oao button, .oao-btn { transition:background-color var(--oao-motion-fast) ease, box-shadow var(--oao-motion-fast) ease; }
+[data-oao-motion="reduced"] *, [data-oao-motion="reduced"] *::before, [data-oao-motion="reduced"] *::after {
+    animation:none !important; transition:none !important; scroll-behavior:auto !important;
+}
+[data-oao-motion="reduced"] { --oao-motion-fast:0ms; --oao-motion-normal:0ms; --oao-motion-enter:0ms; }
+[data-oao-motion="reduced"] .oao-btn:hover,
+[data-oao-motion="reduced"] .oao-btn:active { transform:none !important; }
+@media(prefers-reduced-motion:reduce) {
+    :root { --oao-motion-fast:0ms; --oao-motion-normal:0ms; --oao-motion-enter:0ms; }
+    *, *::before, *::after { animation:none !important; transition:none !important; scroll-behavior:auto !important; }
+    .oao-btn:hover, .oao-btn:active { transform:none !important; }
+}
